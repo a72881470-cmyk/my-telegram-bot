@@ -17,7 +17,11 @@ logging.basicConfig(
 # --------------------------
 # Переменные окружения
 # --------------------------
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+try:
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+except Exception as e:
+    print(TELEGRAM_BOT_TOKEN)
+    print('e')
 TELEGRAM_CHAT_IDS = [c.strip() for c in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
 
 if not TELEGRAM_BOT_TOKEN:
@@ -236,3 +240,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
