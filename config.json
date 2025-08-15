@@ -8,6 +8,6 @@
   "poll_interval_seconds": 20,
   "phantom_link": true,
   "network": "solana",
-  "chat_id": -1002806652676,8228688268:AAFm7DdZzqK99UNMJrSmqZpNyLe1nDY2-5o
-
-
+  "chat_id": -1002806652676,
+  "bot_token": "8228688268:AAFm7DdZzqK99UNMJrSmqZpNyLe1nDY2-5o"
+}
