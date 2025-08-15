@@ -1,0 +1,13 @@
+{
+  "deposit_usd": 500,
+  "max_trades": 5,
+  "min_liquidity_usd": 5000,
+  "min_volume_usd_1h": 2000,
+  "min_price_change_5m": 5,
+  "min_price_change_1h": 15,
+  "poll_interval_seconds": 20,
+  "phantom_link": true,
+  "network": "solana",
+  "chat_id": -1002806652676,8228688268:AAFm7DdZzqK99UNMJrSmqZpNyLe1nDY2-5o
+
+
