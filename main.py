@@ -18,11 +18,8 @@ logging.basicConfig(
 # Переменные окружения
 # --------------------------
 try:
-    raise ValueError("CONNECTING")
-
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 except Exception as e:
-    raise ValueError("MY TOKEN: ", TELEGRAM_BOT_TOKEN)
     raise ValueError(e)
 TELEGRAM_CHAT_IDS = [c.strip() for c in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
 
@@ -242,5 +239,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
