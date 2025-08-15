@@ -1,9 +1,8 @@
 import os
 import time
-import math
 import logging
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # ==========================
@@ -18,29 +17,23 @@ logging.basicConfig(
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_IDS = [c.strip() for c in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
 
-# Фильтры / параметры
+# Фильтры
 MIN_LIQ_USD       = float(os.getenv("MIN_LIQ_USD", 500))     # мин. ликвидность $
 MIN_PCHANGE_5M    = float(os.getenv("MIN_PCHANGE_5M", 25))   # мин. рост за 5м, %
-NEW_MAX_AGE_MIN   = int(os.getenv("NEW_MAX_AGE_MIN", 60))    # возраст новой пары, мин
-POLL_SECONDS      = int(os.getenv("POLL_SECONDS", 60))       # период опроса
+NEW_MAX_AGE_MIN   = int(os.getenv("NEW_MAX_AGE_MIN", 60))    # макс. возраст пары (мин)
+POLL_SECONDS      = int(os.getenv("POLL_SECONDS", 60))       # опрос каждые N секунд
 
-# DexScreener endpoint для Solana (возвращает список пар)
 DEX_URL = "https://api.dexscreener.com/latest/dex/search?q=solana"
 
 if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
-    logging.error("❌ TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID не заданы в .env")
+    logging.error("❌ TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не заданы в .env")
     raise SystemExit(1)
 
-# кэш, чтобы не спамить одним и тем же токеном
-# sent_cache[pairAddress] = time.time() когда отправили
 sent_cache = {}
 
 # ==========================
 # Утилиты
 # ==========================
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
 def fmt_usd(x) -> str:
     try:
         x = float(x)
@@ -51,25 +44,21 @@ def fmt_usd(x) -> str:
         return f"${x}"
 
 def fmt_minutes_ago(created_ms: int) -> str:
-    """Возвращает человекочитаемый возраст пары."""
     if not created_ms:
         return "—"
     age_min = (time.time() - created_ms / 1000.0) / 60.0
     if age_min < 60:
         return f"{age_min:.0f} мин"
-    hours = age_min / 60.0
-    return f"{hours:.1f} ч"
+    return f"{age_min / 60.0:.1f} ч"
 
 def is_meme(tags) -> bool:
     tags = [str(t).lower() for t in (tags or [])]
-    # разные варианты, которые встречаются у DexScreener
     MEME_MARKERS = {"meme", "memecoin", "shitcoin", "pepe", "doge"}
     return any(t in MEME_MARKERS for t in tags)
 
 def build_links(pair: dict):
     pair_addr = pair.get("pairAddress", "")
-    base = pair.get("baseToken", {}) or {}
-    token_addr = base.get("address", "")
+    token_addr = (pair.get("baseToken") or {}).get("address", "")
     dex_link = f"https://dexscreener.com/solana/{pair_addr}" if pair_addr else ""
     phantom_link = f"https://phantom.app/ul/browse/{token_addr}" if token_addr else ""
     return dex_link, phantom_link
@@ -78,15 +67,17 @@ def send_telegram(text: str):
     for chat_id in TELEGRAM_CHAT_IDS:
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
         try:
-            r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                              json=payload, timeout=10)
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json=payload, timeout=10
+            )
             if r.status_code != 200:
                 logging.warning("Telegram error (%s): %s", chat_id, r.text)
         except Exception as e:
             logging.error("Telegram send error (%s): %s", chat_id, e)
 
 # ==========================
-# Основная логика
+# Логика
 # ==========================
 def fetch_pairs() -> list[dict]:
     try:
@@ -94,20 +85,13 @@ def fetch_pairs() -> list[dict]:
         if r.status_code != 200:
             logging.warning("DexScreener HTTP %s: %s", r.status_code, r.text[:200])
             return []
-        data = r.json() or {}
-        return data.get("pairs", []) or []
+        return (r.json() or {}).get("pairs", []) or []
     except Exception as e:
         logging.error("DexScreener request error: %s", e)
         return []
 
 def pair_age_minutes(pair: dict) -> float | None:
-    """
-    DexScreener в разных выдачах даёт:
-      - pairCreatedAt (мс)
-      - info.createdAt (мс)
-    Возвращаем возраст в минутах, если можно вычислить.
-    """
-    created_ms = pair.get("pairCreatedAt") or (pair.get("info", {}) or {}).get("createdAt")
+    created_ms = pair.get("pairCreatedAt") or (pair.get("info") or {}).get("createdAt")
     if not created_ms:
         return None
     try:
@@ -116,23 +100,15 @@ def pair_age_minutes(pair: dict) -> float | None:
         return None
 
 def should_notify(pair: dict) -> tuple[bool, str]:
-    """
-    Проверка условий:
-      - сеть Solana
-      - возраст ≤ NEW_MAX_AGE_MIN
-      - рост 5м ≥ MIN_PCHANGE_5M
-      - ликвидность ≥ MIN_LIQ_USD
-    Возвращает (ok, label) где label = "[MEME]" или "[SOL]".
-    """
     if (pair.get("chainId") or "").lower() != "solana":
         return (False, "")
     age_min = pair_age_minutes(pair)
     if age_min is None or age_min > NEW_MAX_AGE_MIN:
         return (False, "")
-    price_change_5m = (pair.get("priceChange", {}) or {}).get("m5")
+    price_change_5m = (pair.get("priceChange") or {}).get("m5")
     if price_change_5m is None or float(price_change_5m) < MIN_PCHANGE_5M:
         return (False, "")
-    liq_usd = (pair.get("liquidity", {}) or {}).get("usd") or 0
+    liq_usd = (pair.get("liquidity") or {}).get("usd") or 0
     try:
         liq_usd = float(liq_usd)
     except Exception:
@@ -143,14 +119,16 @@ def should_notify(pair: dict) -> tuple[bool, str]:
     return (True, label)
 
 def prune_sent_cache():
-    """Чистим кэш от отправленных, старше окна NEW_MAX_AGE_MIN, чтобы не копился."""
     cutoff = time.time() - NEW_MAX_AGE_MIN * 60
     for pid, ts in list(sent_cache.items()):
         if ts < cutoff:
             sent_cache.pop(pid, None)
 
+# ==========================
+# Запуск
+# ==========================
 def main():
-    logging.info("🚀 Бот запущен. Ищу НОВЫЕ токены Solana с ростом ≥ %.2f%% за 5м…", MIN_PCHANGE_5M)
+    logging.info("🚀 Бот запущен. Ищу новые токены Solana с ростом ≥ %.2f%% за 5м…", MIN_PCHANGE_5M)
     while True:
         started = time.monotonic()
         try:
@@ -164,14 +142,10 @@ def main():
                     continue
 
                 pair_id = p.get("pairAddress")
-                if not pair_id:
+                if not pair_id or pair_id in sent_cache:
                     continue
 
-                # чтобы не спамить одинаковыми алертами по одной паре в пределах окна "новизны"
-                if pair_id in sent_cache:
-                    continue
-
-                base = p.get("baseToken", {}) or {}
+                base = p.get("baseToken") or {}
                 name = base.get("name", "Unknown")
                 symbol = base.get("symbol", "")
                 price = p.get("priceUsd", 0) or 0
@@ -179,20 +153,18 @@ def main():
                     price = float(price)
                 except Exception:
                     pass
-                pchg5 = float((p.get("priceChange", {}) or {}).get("m5", 0) or 0)
-                liq_usd = float((p.get("liquidity", {}) or {}).get("usd", 0) or 0)
-                created_ms = p.get("pairCreatedAt") or (p.get("info", {}) or {}).get("createdAt")
+                pchg5 = float((p.get("priceChange") or {}).get("m5", 0) or 0)
+                liq_usd = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                created_ms = p.get("pairCreatedAt") or (p.get("info") or {}).get("createdAt")
                 age_str = fmt_minutes_ago(created_ms) if created_ms else "—"
 
                 dex_link, phantom_link = build_links(p)
 
-                # лог в Railway
                 logging.info(
                     "[Найден токен] %s %s | Рост 5м: %.2f%% | Цена: %s | Ликвидн.: $%s | Возраст: %s | %s",
                     label, f"{name} ({symbol})", pchg5, fmt_usd(price), f"{liq_usd:,.0f}", age_str, dex_link
                 )
 
-                # сообщение в Telegram
                 msg = (
                     f"{label} <b>{name} ({symbol})</b>\n"
                     f"📈 Рост за 5м: <b>+{pchg5:.2f}%</b>\n"
@@ -208,17 +180,14 @@ def main():
                 found += 1
 
             if found == 0:
-                logging.info("⏳ Подходящих новых токенов сейчас нет. Жду…")
+                logging.info("⏳ Подходящих новых токенов нет. Жду…")
 
         except Exception as e:
             logging.error("❌ Ошибка цикла: %s", e, exc_info=True)
-            # небольшая пауза при ошибках
             time.sleep(5)
 
-        # сон с учётом времени обработки
         elapsed = time.monotonic() - started
-        sleep_for = max(1.0, POLL_SECONDS - elapsed)
-        time.sleep(sleep_for)
+        time.sleep(max(1.0, POLL_SECONDS - elapsed))
 
 
 if __name__ == "__main__":
