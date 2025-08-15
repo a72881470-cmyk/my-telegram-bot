@@ -1,16 +1,17 @@
 import json
-import time
+import asyncio
 import requests
 from datetime import datetime, timedelta
 from telegram import Bot
 from telegram.constants import ParseMode
 
-# Загружаем настройки
+# Загружаем конфиг
 with open("config.json", "r", encoding="utf-8") as f:
     config = json.load(f)
 
 BOT_TOKEN = config["bot_token"]
 CHAT_ID = config["chat_id"]
+POLL_INTERVAL = config["poll_interval_seconds"]
 
 bot = Bot(token=BOT_TOKEN)
 
@@ -20,7 +21,7 @@ HEADERS = {
 }
 
 def get_solana_data():
-    """Запрос к DexScreener API с защитой от ошибок"""
+    """Запрос к DexScreener API"""
     try:
         response = requests.get(API_URL, headers=HEADERS, timeout=10)
         if response.status_code == 200:
@@ -45,24 +46,27 @@ def format_message(data):
         msg += f"\n{name}: ${price} | Ликвидность: ${liquidity}"
     return msg
 
-def main():
+async def send_message_periodically():
+    """Основной цикл работы"""
     last_active_msg_time = datetime.now()
 
     while True:
-        # 1. Получаем данные
+        # Получаем данные
         data = get_solana_data()
         message = format_message(data)
 
-        # 2. Отправляем данные в чат
-        bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=ParseMode.HTML)
+        # Отправляем сообщение с парами
+        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=ParseMode.HTML)
 
-        # 3. Проверяем, пора ли отправить сообщение о том, что бот активен
+        # Если прошло больше часа — отправляем "бот активен"
         if datetime.now() - last_active_msg_time >= timedelta(hours=1):
-            bot.send_message(chat_id=CHAT_ID, text="✅ Бот активен", parse_mode=ParseMode.HTML)
+            await bot.send_message(chat_id=CHAT_ID, text="✅ Бот активен", parse_mode=ParseMode.HTML)
             last_active_msg_time = datetime.now()
 
-        # 4. Ждём указанное время перед следующим циклом
-        time.sleep(config["poll_interval_seconds"])
+        await asyncio.sleep(POLL_INTERVAL)
+
+async def main():
+    await send_message_periodically()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
