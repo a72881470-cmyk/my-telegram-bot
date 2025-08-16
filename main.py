@@ -51,10 +51,29 @@ def fmt_minutes_ago(created_ms: int) -> str:
         return f"{age_min:.0f} мин"
     return f"{age_min / 60.0:.1f} ч"
 
-def is_meme(tags) -> bool:
-    tags = [str(t).lower() for t in (tags or [])]
-    MEME_MARKERS = {"meme", "memecoin", "shitcoin", "pepe", "doge"}
-    return any(t in MEME_MARKERS for t in tags)
+def is_meme(pair: dict) -> bool:
+    """
+    Определяет, является ли токен мемкой.
+    Проверяем теги и название/символ токена.
+    """
+    tags = [str(t).lower() for t in (pair.get("tags") or [])]
+    MEME_MARKERS = {"meme", "memecoin", "shitcoin", "pepe", "doge", "pump", "moon", "elon", "inu"}
+
+    # Проверка по тегам
+    if any(t in MEME_MARKERS for t in tags):
+        return True
+
+    # Проверка по имени/символу
+    base = pair.get("baseToken", {}) or {}
+    name = (base.get("name") or "").lower()
+    symbol = (base.get("symbol") or "").lower()
+
+    if any(word in name for word in MEME_MARKERS):
+        return True
+    if any(word in symbol for word in MEME_MARKERS):
+        return True
+
+    return False
 
 def build_links(pair: dict):
     pair_addr = pair.get("pairAddress", "")
@@ -115,7 +134,8 @@ def should_notify(pair: dict) -> tuple[bool, str]:
         liq_usd = 0.0
     if liq_usd < MIN_LIQ_USD:
         return (False, "")
-    label = "[MEME]" if is_meme(pair.get("tags")) else "[SOL]"
+
+    label = "[MEME]" if is_meme(pair) else "[SOL]"
     return (True, label)
 
 def prune_sent_cache():
