@@ -3,6 +3,7 @@ import json
 import requests
 import websocket
 import logging
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -79,18 +80,31 @@ def on_error(ws, error):
     logging.error(f"WebSocket error: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    logging.info("WebSocket closed")
+    logging.warning("⚠️ WebSocket closed")
 
 def on_open(ws):
     logging.info("✅ Подключено к PumpPortal WebSocket")
+    send_telegram("✅ Подключено к PumpPortal WebSocket")
+
+def run_ws():
+    while True:
+        try:
+            ws = websocket.WebSocketApp(
+                "wss://pumpportal.fun/api/data",
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close
+            )
+            ws.on_open = on_open
+            ws.run_forever(ping_interval=30, ping_timeout=10)
+        except Exception as e:
+            logging.error(f"Ошибка WebSocket: {e}")
+
+        logging.info("♻️ Переподключение через 5 секунд...")
+        send_telegram("♻️ Переподключение к PumpPortal WebSocket...")
+        time.sleep(5)
 
 if __name__ == "__main__":
     logging.info("🚀 Бот запущен. Ловим мемкоины Solana…")
-    ws = websocket.WebSocketApp(
-        "wss://pumpportal.fun/api/data",
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close
-    )
-    ws.on_open = on_open
-    ws.run_forever()
+    send_telegram("🤖 Бот запущен и готов ловить мемкоины Solana!")
+    run_ws()
