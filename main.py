@@ -14,6 +14,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 def send_telegram(msg: str):
     if not BOT_TOKEN or not CHAT_ID:
+        logging.warning("❌ BOT_TOKEN или CHAT_ID не заданы, сообщение не отправлено")
         return
     try:
         requests.post(
@@ -26,11 +27,20 @@ def send_telegram(msg: str):
 # === HTTP сервер для Railway ===
 PORT = int(os.getenv("PORT", 8080))
 
+class HealthHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write("✅ Bot is running".encode("utf-8"))
+
+    def log_message(self, format, *args):
+        return  # убираем лишние логи
+
 def run_http_server():
-    handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("0.0.0.0", PORT), handler) as httpd:
-        logging.info(f"✅ HTTP сервер слушает порт {PORT}")
-        send_telegram(f"✅ HTTP сервер слушает порт {PORT}")
+    with socketserver.TCPServer(("0.0.0.0", PORT), HealthHandler) as httpd:
+        logging.info(f"🌍 HTTP сервер слушает порт {PORT}")
+        send_telegram(f"🌍 HTTP сервер слушает порт {PORT}")
         httpd.serve_forever()
 
 # === WebSocket PumpPortal ===
