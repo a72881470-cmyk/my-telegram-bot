@@ -27,9 +27,17 @@ def send_telegram(msg: str):
 # === HTTP сервер для Railway ===
 PORT = int(os.getenv("PORT", 8080))
 
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")  # healthcheck
+        else:
+            super().do_GET()
+
 def run_http_server():
-    handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("0.0.0.0", PORT), handler) as httpd:
+    with socketserver.TCPServer(("0.0.0.0", PORT), Handler) as httpd:
         logging.info(f"🌍 HTTP сервер слушает порт {PORT}")
         send_telegram(f"🌍 HTTP сервер слушает порт {PORT}")
         httpd.serve_forever()
@@ -44,14 +52,14 @@ def on_open(ws):
     send_telegram("🔗 WebSocket подключен к PumpPortal")
 
 def start_websocket():
-    while True:  # бесконечный цикл
+    while True:
         try:
             ws = websocket.WebSocketApp(
                 "wss://pumpportal.fun/api/data",
                 on_message=on_message,
                 on_open=on_open
             )
-            ws.run_forever()
+            ws.run_forever(ping_interval=30, ping_timeout=10)
         except Exception as e:
             logging.error(f"❌ Ошибка WebSocket: {e}")
             send_telegram(f"❌ Ошибка WebSocket: {e}")
@@ -60,9 +68,10 @@ def start_websocket():
 
 if __name__ == "__main__":
     logging.info("🚀 Бот запущен. Ловим мемкоины Solana…")
+    send_telegram("🚀 Бот запущен на Railway")
 
-    # Запускаем HTTP сервер в отдельном потоке
-    threading.Thread(target=run_http_server, daemon=True).start()
+    # Запускаем WebSocket в отдельном потоке (НЕ daemon!)
+    threading.Thread(target=start_websocket).start()
 
-    # Запускаем WebSocket (с авто-переподключением)
-    start_websocket()
+    # Главный процесс — HTTP сервер (держит Railway живым)
+    run_http_server()
