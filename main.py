@@ -18,10 +18,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_IDS = [c.strip() for c in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
 
 # Фильтры
-MIN_LIQ_USD       = float(os.getenv("MIN_LIQ_USD", 500))     # мин. ликвидность $
-MIN_PCHANGE_5M    = float(os.getenv("MIN_PCHANGE_5M", 25))   # мин. рост за 5м, %
-NEW_MAX_AGE_MIN   = int(os.getenv("NEW_MAX_AGE_MIN", 60))    # макс. возраст пары (мин)
-POLL_SECONDS      = int(os.getenv("POLL_SECONDS", 60))       # опрос каждые N секунд
+MIN_LIQ_USD       = float(os.getenv("MIN_LIQ_USD", 10))      # минимальная ликвидность
+NEW_MAX_AGE_MIN   = int(os.getenv("NEW_MAX_AGE_MIN", 2))     # макс. возраст пары (мин)
+POLL_SECONDS      = int(os.getenv("POLL_SECONDS", 5))        # опрос каждые N секунд
 
 DEX_URL = "https://api.dexscreener.com/latest/dex/search?q=solana"
 
@@ -52,18 +51,12 @@ def fmt_minutes_ago(created_ms: int) -> str:
     return f"{age_min / 60.0:.1f} ч"
 
 def is_meme(pair: dict) -> bool:
-    """
-    Определяет, является ли токен мемкой.
-    Проверяем теги и название/символ токена.
-    """
     tags = [str(t).lower() for t in (pair.get("tags") or [])]
     MEME_MARKERS = {"meme", "memecoin", "shitcoin", "pepe", "doge", "pump", "moon", "elon", "inu"}
 
-    # Проверка по тегам
     if any(t in MEME_MARKERS for t in tags):
         return True
 
-    # Проверка по имени/символу
     base = pair.get("baseToken", {}) or {}
     name = (base.get("name") or "").lower()
     symbol = (base.get("symbol") or "").lower()
@@ -121,12 +114,11 @@ def pair_age_minutes(pair: dict) -> float | None:
 def should_notify(pair: dict) -> tuple[bool, str]:
     if (pair.get("chainId") or "").lower() != "solana":
         return (False, "")
+
     age_min = pair_age_minutes(pair)
     if age_min is None or age_min > NEW_MAX_AGE_MIN:
         return (False, "")
-    price_change_5m = (pair.get("priceChange") or {}).get("m5")
-    if price_change_5m is None or float(price_change_5m) < MIN_PCHANGE_5M:
-        return (False, "")
+
     liq_usd = (pair.get("liquidity") or {}).get("usd") or 0
     try:
         liq_usd = float(liq_usd)
@@ -135,8 +127,10 @@ def should_notify(pair: dict) -> tuple[bool, str]:
     if liq_usd < MIN_LIQ_USD:
         return (False, "")
 
-    label = "[MEME]" if is_meme(pair) else "[SOL]"
-    return (True, label)
+    if is_meme(pair):
+        return (True, "[MEME]")
+
+    return (False, "")
 
 def prune_sent_cache():
     cutoff = time.time() - NEW_MAX_AGE_MIN * 60
@@ -148,7 +142,7 @@ def prune_sent_cache():
 # Запуск
 # ==========================
 def main():
-    logging.info("🚀 Бот запущен. Ищу новые токены Solana с ростом ≥ %.2f%% за 5м…", MIN_PCHANGE_5M)
+    logging.info("🚀 Бот запущен. Ищу новые MEME токены Solana…")
     while True:
         started = time.monotonic()
         try:
@@ -173,7 +167,6 @@ def main():
                     price = float(price)
                 except Exception:
                     pass
-                pchg5 = float((p.get("priceChange") or {}).get("m5", 0) or 0)
                 liq_usd = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                 created_ms = p.get("pairCreatedAt") or (p.get("info") or {}).get("createdAt")
                 age_str = fmt_minutes_ago(created_ms) if created_ms else "—"
@@ -181,13 +174,12 @@ def main():
                 dex_link, phantom_link = build_links(p)
 
                 logging.info(
-                    "[Найден токен] %s %s | Рост 5м: %.2f%% | Цена: %s | Ликвидн.: $%s | Возраст: %s | %s",
-                    label, f"{name} ({symbol})", pchg5, fmt_usd(price), f"{liq_usd:,.0f}", age_str, dex_link
+                    "[Найден MEME] %s %s | Цена: %s | Ликвидн.: $%s | Возраст: %s | %s",
+                    name, f"({symbol})", fmt_usd(price), f"{liq_usd:,.0f}", age_str, dex_link
                 )
 
                 msg = (
                     f"{label} <b>{name} ({symbol})</b>\n"
-                    f"📈 Рост за 5м: <b>+{pchg5:.2f}%</b>\n"
                     f"💰 Цена: <b>{fmt_usd(price)}</b>\n"
                     f"💵 Ликвидность: <b>${liq_usd:,.0f}</b>\n"
                     f"⏱ Возраст пары: <b>{age_str}</b>\n"
@@ -200,7 +192,7 @@ def main():
                 found += 1
 
             if found == 0:
-                logging.info("⏳ Подходящих новых токенов нет. Жду…")
+                logging.info("⏳ Новых мемов не найдено. Жду…")
 
         except Exception as e:
             logging.error("❌ Ошибка цикла: %s", e, exc_info=True)
