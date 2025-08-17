@@ -113,7 +113,7 @@ PORT = int(os.getenv("PORT", 8080))
 
 def run_http_server():
     handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("", PORT), handler) as httpd:
+    with socketserver.TCPServer(("0.0.0.0", PORT), handler) as httpd:   # ✅ фикс
         logging.info(f"🌍 HTTP сервер запущен на порту {PORT}")
         httpd.serve_forever()
 
