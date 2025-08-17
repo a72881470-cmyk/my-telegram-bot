@@ -1,13 +1,11 @@
 {
-  "deposit_usd": 500,
-  "max_trades": 5,
-  "min_liquidity_usd": 5000,
-  "min_volume_usd_1h": 2000,
-  "min_price_change_5m": 5,
-  "min_price_change_1h": 15,
-  "poll_interval_seconds": 20,
-  "phantom_link": true,
-  "network": "solana",
-  "chat_id": -1002806652676,
-  "bot_token": "8228688268:AAFm7DdZzqK99UNMJrSmqZpNyLe1nDY2-5o"
+  "bot_token": "8452124323:AAFedKmgQAWLg9P3tIWl9pD7FUIPyIhPcya",
+  "chat_id": "-1002806652676",
+
+  "new_max_age_min": 10,
+  "poll_seconds": 30,
+
+  "min_liq_usd": 300,
+  "min_pchange_5m": 25,
+  "min_trades_5m": 10
 }
