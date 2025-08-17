@@ -1,16 +1,16 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import http.server
+import socketserver
 import os
 
 PORT = int(os.getenv("PORT", 8080))
 
-class HealthHandler(BaseHTTPRequestHandler):
+class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
+        self.send_header("Content-type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write(b"✅ Bot is running!")
+        self.wfile.write("✅ Bot is running!".encode("utf-8"))
 
-if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    print(f"✅ Web server running on port {PORT}")
-    server.serve_forever()
+with socketserver.TCPServer(("", PORT), Handler) as httpd:
+    print(f"🌍 Server started on port {PORT}")
+    httpd.serve_forever()
