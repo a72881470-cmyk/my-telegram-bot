@@ -5,6 +5,7 @@ import socketserver
 import logging
 import websocket
 import requests
+import time
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -14,7 +15,6 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 def send_telegram(msg: str):
     if not BOT_TOKEN or not CHAT_ID:
-        logging.warning("❌ BOT_TOKEN или CHAT_ID не заданы, сообщение не отправлено")
         return
     try:
         requests.post(
@@ -27,18 +27,9 @@ def send_telegram(msg: str):
 # === HTTP сервер для Railway ===
 PORT = int(os.getenv("PORT", 8080))
 
-class HealthHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write("✅ Bot is running".encode("utf-8"))
-
-    def log_message(self, format, *args):
-        return  # убираем лишние логи
-
 def run_http_server():
-    with socketserver.TCPServer(("0.0.0.0", PORT), HealthHandler) as httpd:
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("0.0.0.0", PORT), handler) as httpd:
         logging.info(f"🌍 HTTP сервер слушает порт {PORT}")
         send_telegram(f"🌍 HTTP сервер слушает порт {PORT}")
         httpd.serve_forever()
@@ -53,12 +44,19 @@ def on_open(ws):
     send_telegram("🔗 WebSocket подключен к PumpPortal")
 
 def start_websocket():
-    ws = websocket.WebSocketApp(
-        "wss://pumpportal.fun/api/data",
-        on_message=on_message,
-        on_open=on_open
-    )
-    ws.run_forever()
+    while True:  # бесконечный цикл
+        try:
+            ws = websocket.WebSocketApp(
+                "wss://pumpportal.fun/api/data",
+                on_message=on_message,
+                on_open=on_open
+            )
+            ws.run_forever()
+        except Exception as e:
+            logging.error(f"❌ Ошибка WebSocket: {e}")
+            send_telegram(f"❌ Ошибка WebSocket: {e}")
+        logging.info("♻️ Переподключение через 5 секунд…")
+        time.sleep(5)
 
 if __name__ == "__main__":
     logging.info("🚀 Бот запущен. Ловим мемкоины Solana…")
@@ -66,5 +64,5 @@ if __name__ == "__main__":
     # Запускаем HTTP сервер в отдельном потоке
     threading.Thread(target=run_http_server, daemon=True).start()
 
-    # Запускаем WebSocket
+    # Запускаем WebSocket (с авто-переподключением)
     start_websocket()
