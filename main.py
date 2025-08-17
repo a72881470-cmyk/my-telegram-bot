@@ -6,8 +6,12 @@ import logging
 import time
 import signal
 import sys
+import threading
+import http.server
+import socketserver
 from dotenv import load_dotenv
 
+# Загружаем .env
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -20,6 +24,7 @@ DEXSCREENER_URL = "https://api.dexscreener.com/latest/dex/tokens/"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+# ================= TELEGRAM =================
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
@@ -27,6 +32,7 @@ def send_telegram(text):
     except Exception as e:
         logging.error(f"Ошибка отправки в Telegram: {e}")
 
+# ================= DEXSCREENER =================
 def check_with_dexscreener(token_address):
     try:
         url = f"{DEXSCREENER_URL}{token_address}"
@@ -46,6 +52,7 @@ def check_with_dexscreener(token_address):
         logging.error(f"DexScreener error: {e}")
         return False, None
 
+# ================= WEBSOCKET CALLBACKS =================
 def on_message(ws, message):
     try:
         data = json.loads(message)
@@ -62,7 +69,7 @@ def on_message(ws, message):
             vol_5m = pair.get("volume", {}).get("m5", 0)
 
             send_telegram(
-                f"⚡ Внимание! Потенциально ростущий токен\n"
+                f"⚡ Внимание! Потенциально растущий токен\n"
                 f"{name} ({symbol})\n"
                 f"Цена: ${price}\n"
                 f"Ликвидность: ${liquidity}\n"
@@ -82,6 +89,7 @@ def on_open(ws):
     logging.info("✅ Подключено к PumpPortal WebSocket")
     send_telegram("✅ Подключено к PumpPortal WebSocket")
 
+# ================= WEBSOCKET RUNNER =================
 def run_ws():
     while True:
         try:
@@ -100,7 +108,16 @@ def run_ws():
         send_telegram("♻️ Переподключение к PumpPortal WebSocket...")
         time.sleep(5)
 
-# ✅ обработка остановки Railway (Ctrl+C, SIGTERM)
+# ================= HTTP SERVER (для Railway) =================
+PORT = int(os.getenv("PORT", 8080))
+
+def run_http_server():
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", PORT), handler) as httpd:
+        logging.info(f"🌍 HTTP сервер запущен на порту {PORT}")
+        httpd.serve_forever()
+
+# ================= SHUTDOWN HANDLER =================
 def shutdown_handler(sig, frame):
     logging.info("🛑 Бот остановлен")
     send_telegram("🛑 Бот остановлен")
@@ -109,7 +126,13 @@ def shutdown_handler(sig, frame):
 signal.signal(signal.SIGINT, shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
 
+# ================= MAIN =================
 if __name__ == "__main__":
     logging.info("🚀 Бот запущен. Ловим мемкоины Solana…")
     send_telegram("🤖 Бот запущен и готов ловить мемкоины Solana!")
+
+    # Запускаем HTTP сервер в отдельном потоке (для Railway)
+    threading.Thread(target=run_http_server, daemon=True).start()
+
+    # Запускаем WebSocket
     run_ws()
