@@ -14,6 +14,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 def send_telegram(msg: str):
+    """Отправка сообщений в Telegram"""
     if not BOT_TOKEN or not CHAT_ID:
         return
     try:
@@ -27,19 +28,12 @@ def send_telegram(msg: str):
 # === HTTP сервер для Railway ===
 PORT = int(os.getenv("PORT", 8080))
 
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")  # healthcheck
-        else:
-            super().do_GET()
-
 def run_http_server():
-    with socketserver.TCPServer(("0.0.0.0", PORT), Handler) as httpd:
-        logging.info(f"🌍 HTTP сервер слушает порт {PORT}")
-        send_telegram(f"🌍 HTTP сервер слушает порт {PORT}")
+    """HTTP сервер, чтобы Railway не гасил контейнер"""
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("0.0.0.0", PORT), handler) as httpd:
+        logging.info(f"🌐 Server started on port {PORT}")
+        send_telegram(f"🌐 Server started on port {PORT}")
         httpd.serve_forever()
 
 # === WebSocket PumpPortal ===
@@ -51,27 +45,38 @@ def on_open(ws):
     logging.info("🔗 WebSocket подключен")
     send_telegram("🔗 WebSocket подключен к PumpPortal")
 
+def on_error(ws, error):
+    logging.error(f"❌ WebSocket ошибка: {error}")
+    send_telegram(f"❌ WebSocket ошибка: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    logging.warning(f"⚠️ WebSocket закрыт: {close_status_code}, {close_msg}")
+    send_telegram(f"⚠️ WebSocket закрыт. Переподключение...")
+
 def start_websocket():
+    """Подключение к WebSocket с автопереподключением"""
     while True:
         try:
             ws = websocket.WebSocketApp(
                 "wss://pumpportal.fun/api/data",
                 on_message=on_message,
-                on_open=on_open
+                on_open=on_open,
+                on_error=on_error,
+                on_close=on_close
             )
-            ws.run_forever(ping_interval=30, ping_timeout=10)
+            ws.run_forever()
         except Exception as e:
-            logging.error(f"❌ Ошибка WebSocket: {e}")
-            send_telegram(f"❌ Ошибка WebSocket: {e}")
-        logging.info("♻️ Переподключение через 5 секунд…")
+            logging.error(f"💥 Критическая ошибка WebSocket: {e}")
+            send_telegram(f"💥 Критическая ошибка WebSocket: {e}")
+        logging.info("♻️ Переподключение к WebSocket через 5 секунд...")
         time.sleep(5)
 
 if __name__ == "__main__":
     logging.info("🚀 Бот запущен. Ловим мемкоины Solana…")
     send_telegram("🚀 Бот запущен на Railway")
 
-    # Запускаем WebSocket в отдельном потоке (НЕ daemon!)
-    threading.Thread(target=start_websocket).start()
+    # Запускаем HTTP сервер в отдельном потоке
+    threading.Thread(target=run_http_server, daemon=True).start()
 
-    # Главный процесс — HTTP сервер (держит Railway живым)
-    run_http_server()
+    # Запускаем WebSocket с автопереподключением
+    start_websocket()
