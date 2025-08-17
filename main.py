@@ -4,6 +4,8 @@ import requests
 import websocket
 import logging
 import time
+import signal
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,7 +13,6 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 🔥 Фильтры для "ростущих" токенов
 MIN_LIQ_USD = float(os.getenv("MIN_LIQ_USD", 5000))
 MIN_VOL_5M = float(os.getenv("MIN_VOL_5M", 3000))
 
@@ -31,7 +32,6 @@ def check_with_dexscreener(token_address):
         url = f"{DEXSCREENER_URL}{token_address}"
         r = requests.get(url, timeout=10)
         data = r.json()
-
         if "pairs" not in data:
             return False, None
 
@@ -41,7 +41,6 @@ def check_with_dexscreener(token_address):
 
             if liquidity_usd >= MIN_LIQ_USD and vol_5m >= MIN_VOL_5M:
                 return True, pair
-
         return False, None
     except Exception as e:
         logging.error(f"DexScreener error: {e}")
@@ -54,10 +53,8 @@ def on_message(ws, message):
         name = data.get("name")
         symbol = data.get("symbol")
 
-        # 1. Отправляем все мемки
         send_telegram(f"🚀 Новый мемкоин на Solana!\n{name} ({symbol})\nCA: {token_address}")
 
-        # 2. Проверяем на «ростущий»
         is_potential, pair = check_with_dexscreener(token_address)
         if is_potential:
             price = pair.get("priceUsd")
@@ -72,7 +69,6 @@ def on_message(ws, message):
                 f"Объём (5m): ${vol_5m}\n"
                 f"CA: {token_address}"
             )
-
     except Exception as e:
         logging.error(f"Ошибка обработки сообщения: {e}")
 
@@ -103,6 +99,15 @@ def run_ws():
         logging.info("♻️ Переподключение через 5 секунд...")
         send_telegram("♻️ Переподключение к PumpPortal WebSocket...")
         time.sleep(5)
+
+# ✅ обработка остановки Railway (Ctrl+C, SIGTERM)
+def shutdown_handler(sig, frame):
+    logging.info("🛑 Бот остановлен")
+    send_telegram("🛑 Бот остановлен")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, shutdown_handler)
+signal.signal(signal.SIGTERM, shutdown_handler)
 
 if __name__ == "__main__":
     logging.info("🚀 Бот запущен. Ловим мемкоины Solana…")
