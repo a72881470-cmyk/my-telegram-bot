@@ -23,12 +23,8 @@ LIQ_DROP_RUG_PCT  = float(os.getenv("LIQ_DROP_RUG_PCT", 50))
 
 # === Системные ===
 PORT          = int(os.getenv("PORT", 8080))
-PING_INTERVAL = int(os.getenv("PING_INTERVAL", 10))   # 👈 сделал 10 секунд
+PING_INTERVAL = int(os.getenv("PING_INTERVAL", 10))   # каждые 10 сек проверка
 PING_TIMEOUT  = int(os.getenv("PING_TIMEOUT", 12))
-
-# === Опционально: GPT-анализ ===
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # === Telegram ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -42,7 +38,7 @@ def send_telegram(text: str):
     except Exception as e:
         print(f"[ERROR] Telegram error: {e}")
 
-# === Проверка DexScreener ===
+# === DexScreener API ===
 def fetch_new_tokens():
     try:
         url = "https://api.dexscreener.com/latest/dex/search?q=solana"
@@ -89,9 +85,12 @@ def filter_memecoins(pairs):
 
 if __name__ == "__main__":
     send_telegram("🚀 Бот запущен и готов ловить мемкоины Solana!")
+    last_status_time = time.time()
+
     while True:
         pairs = fetch_new_tokens()
         memecoins = filter_memecoins(pairs)
+
         if memecoins:
             for m in memecoins:
                 msg = (
@@ -105,5 +104,11 @@ if __name__ == "__main__":
                 )
                 send_telegram(msg)
         else:
-            send_telegram("⏳ Пока чисто, жду дальше...")
+            print("⏳ Пока чисто, жду дальше...")  # 👈 теперь только в консоль
+
+        # раз в 15 минут бот шлет "я жив"
+        if time.time() - last_status_time > 900:
+            send_telegram("⏱ Я на связи, продолжаю сканировать рынок Solana...")
+            last_status_time = time.time()
+
         time.sleep(PING_INTERVAL)
