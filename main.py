@@ -30,9 +30,19 @@ PING_TIMEOUT  = int(os.getenv("PING_TIMEOUT", 12))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-# === Проверка DexScreener ===
-DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens/solana"
+# === Telegram ===
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+def send_telegram(text: str):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"[ERROR] Telegram error: {e}")
+
+# === Проверка DexScreener ===
 def fetch_new_tokens():
     try:
         url = "https://api.dexscreener.com/latest/dex/search?q=solana"
@@ -78,14 +88,22 @@ def filter_memecoins(pairs):
     return result
 
 if __name__ == "__main__":
-    print("🚀 Bot запущен и слушает Solana мемки...")
+    send_telegram("🚀 Бот запущен и готов ловить мемкоины Solana!")
     while True:
         pairs = fetch_new_tokens()
         memecoins = filter_memecoins(pairs)
         if memecoins:
-            print("🎯 Найдены новые мемки:")
             for m in memecoins:
-                print(m)
+                msg = (
+                    f"🎯 <b>{m['symbol']}</b>\n"
+                    f"⏱ Возраст: {m['age_min']} мин\n"
+                    f"💧 Ликвидность: ${m['liq']}\n"
+                    f"📊 FDV: ${m['fdv']}\n"
+                    f"📈 Изм. цены (5м): {m['price_change5m']}%\n"
+                    f"🛒 Транзакции (5м): {m['txns5m']} (buys ratio {m['buys_ratio']})\n"
+                    f"🔗 {m['url']}"
+                )
+                send_telegram(msg)
         else:
-            print("⏳ Пока чисто, жду дальше...")
+            send_telegram("⏳ Пока чисто, жду дальше...")
         time.sleep(PING_INTERVAL)
