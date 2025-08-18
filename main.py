@@ -1,7 +1,9 @@
 import os
 import time
 import requests
+import threading
 from dotenv import load_dotenv
+from flask import Flask
 
 # === Загружаем .env ===
 load_dotenv()
@@ -83,7 +85,20 @@ def filter_memecoins(pairs):
             continue
     return result
 
+# === Flask healthcheck server ===
+app = Flask(__name__)
+
+@app.route("/")
+def health():
+    return "✅ Bot is running", 200
+
+def run_server():
+    app.run(host="0.0.0.0", port=PORT)
+
 if __name__ == "__main__":
+    # Запускаем веб-сервер в отдельном потоке
+    threading.Thread(target=run_server, daemon=True).start()
+
     send_telegram("🚀 Бот запущен и готов ловить мемкоины Solana!")
     last_status_time = time.time()
 
@@ -104,7 +119,7 @@ if __name__ == "__main__":
                 )
                 send_telegram(msg)
         else:
-            print("⏳ Пока чисто, жду дальше...")  # 👈 теперь только в консоль
+            print("⏳ Пока чисто, жду дальше...")  
 
         # раз в 15 минут бот шлет "я жив"
         if time.time() - last_status_time > 900:
