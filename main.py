@@ -8,21 +8,6 @@ from flask import Flask
 # === Загружаем .env ===
 load_dotenv()
 
-# === Фильтры мемок (Solana) ===
-NEW_MAX_AGE_MIN   = int(os.getenv("NEW_MAX_AGE_MIN", 8))
-MAX_LIQ_USD       = float(os.getenv("MAX_LIQ_USD", 25000))
-MAX_FDV_USD       = float(os.getenv("MAX_FDV_USD", 3000000))
-MIN_TXNS_5M       = int(os.getenv("MIN_TXNS_5M", 15))
-MIN_BUYS_RATIO_5M = float(os.getenv("MIN_BUYS_RATIO_5M", 0.55))
-MIN_PCHANGE_5M_BUY   = float(os.getenv("MIN_PCHANGE_5M_BUY", 4))
-MIN_PCHANGE_5M_ALERT = float(os.getenv("MIN_PCHANGE_5M_ALERT", 12))
-
-# === Слежение и выход ===
-TRAIL_START_PCT   = float(os.getenv("TRAIL_START_PCT", 20))
-TRAIL_GAP_PCT     = float(os.getenv("TRAIL_GAP_PCT", 15))
-MAX_DRAWNDOWN_PCT = float(os.getenv("MAX_DRAWNDOWN_PCT", 30))
-LIQ_DROP_RUG_PCT  = float(os.getenv("LIQ_DROP_RUG_PCT", 50))
-
 # === Системные ===
 PORT          = int(os.getenv("PORT", 8080))
 PING_INTERVAL = int(os.getenv("PING_INTERVAL", 10))   # каждые 10 сек проверка
@@ -53,38 +38,6 @@ def fetch_new_tokens():
         print(f"[ERROR] DexScreener fetch error: {e}")
         return []
 
-def filter_memecoins(pairs):
-    result = []
-    for p in pairs:
-        try:
-            age_min = p.get("ageMinutes", 9999)
-            liquidity_usd = p.get("liquidity", {}).get("usd", 0)
-            fdv = p.get("fdv", 0)
-            txns5m = p.get("txns", {}).get("m5", {}).get("buys", 0) + p.get("txns", {}).get("m5", {}).get("sells", 0)
-            buys_ratio = p.get("txns", {}).get("m5", {}).get("buys", 0) / max(1, txns5m)
-            price_change5m = p.get("priceChange", {}).get("m5", 0)
-
-            if (age_min <= NEW_MAX_AGE_MIN and
-                liquidity_usd <= MAX_LIQ_USD and
-                fdv <= MAX_FDV_USD and
-                txns5m >= MIN_TXNS_5M and
-                buys_ratio >= MIN_BUYS_RATIO_5M and
-                price_change5m >= MIN_PCHANGE_5M_BUY):
-
-                result.append({
-                    "symbol": p.get("baseToken", {}).get("symbol"),
-                    "age_min": age_min,
-                    "liq": liquidity_usd,
-                    "fdv": fdv,
-                    "txns5m": txns5m,
-                    "buys_ratio": round(buys_ratio, 2),
-                    "price_change5m": price_change5m,
-                    "url": p.get("url")
-                })
-        except Exception:
-            continue
-    return result
-
 # === Flask healthcheck server ===
 app = Flask(__name__)
 
@@ -99,25 +52,40 @@ if __name__ == "__main__":
     # Запускаем веб-сервер в отдельном потоке
     threading.Thread(target=run_server, daemon=True).start()
 
-    send_telegram("🚀 Бот запущен и готов ловить мемкоины Solana!")
+    send_telegram("🚀 Бот запущен и теперь ловит ВСЕ монеты Solana!")
     last_status_time = time.time()
 
     while True:
         pairs = fetch_new_tokens()
-        memecoins = filter_memecoins(pairs)
 
-        if memecoins:
-            for m in memecoins:
-                msg = (
-                    f"🎯 <b>{m['symbol']}</b>\n"
-                    f"⏱ Возраст: {m['age_min']} мин\n"
-                    f"💧 Ликвидность: ${m['liq']}\n"
-                    f"📊 FDV: ${m['fdv']}\n"
-                    f"📈 Изм. цены (5м): {m['price_change5m']}%\n"
-                    f"🛒 Транзакции (5м): {m['txns5m']} (buys ratio {m['buys_ratio']})\n"
-                    f"🔗 {m['url']}"
-                )
-                send_telegram(msg)
+        if pairs:
+            for p in pairs:
+                try:
+                    symbol = p.get("baseToken", {}).get("symbol", "N/A")
+                    age_min = p.get("ageMinutes", "?")
+                    liquidity_usd = p.get("liquidity", {}).get("usd", 0)
+                    fdv = p.get("fdv", 0)
+                    price_change5m = p.get("priceChange", {}).get("m5", 0)
+                    txns5m = p.get("txns", {}).get("m5", {}).get("buys", 0) + p.get("txns", {}).get("m5", {}).get("sells", 0)
+
+                    url_dex = p.get("url", "")
+                    contract_address = p.get("baseToken", {}).get("address", "")
+                    url_phantom = f"https://phantom.com/tokens/solana/{contract_address}"
+
+                    msg = (
+                        f"🎯 <b>{symbol}</b>\n"
+                        f"⏱ Возраст: {age_min} мин\n"
+                        f"💧 Ликвидность: ${liquidity_usd}\n"
+                        f"📊 FDV: ${fdv}\n"
+                        f"📈 Изм. цены (5м): {price_change5m}%\n"
+                        f"🛒 Транзакции (5м): {txns5m}\n"
+                        f"🔗 <a href='{url_dex}'>DexScreener</a> | <a href='{url_phantom}'>Phantom</a>"
+                    )
+
+                    send_telegram(msg)
+                except Exception as e:
+                    print(f"[ERROR] Format send error: {e}")
+
         else:
             print("⏳ Пока чисто, жду дальше...")  
 
