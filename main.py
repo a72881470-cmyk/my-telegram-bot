@@ -53,7 +53,9 @@ if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
 
     send_telegram("🚀 Бот запущен и теперь ловит ВСЕ монеты Solana!")
+
     last_status_time = time.time()
+    sent_tokens = set()  # тут будем хранить адреса уже отправленных монет
 
     while True:
         pairs = fetch_new_tokens()
@@ -61,6 +63,10 @@ if __name__ == "__main__":
         if pairs:
             for p in pairs:
                 try:
+                    contract_address = p.get("baseToken", {}).get("address", "")
+                    if not contract_address or contract_address in sent_tokens:
+                        continue  # пропускаем если монета уже была
+
                     symbol = p.get("baseToken", {}).get("symbol", "N/A")
                     age_min = p.get("ageMinutes", "?")
                     liquidity_usd = p.get("liquidity", {}).get("usd", 0)
@@ -69,7 +75,6 @@ if __name__ == "__main__":
                     txns5m = p.get("txns", {}).get("m5", {}).get("buys", 0) + p.get("txns", {}).get("m5", {}).get("sells", 0)
 
                     url_dex = p.get("url", "")
-                    contract_address = p.get("baseToken", {}).get("address", "")
                     url_phantom = f"https://phantom.com/tokens/solana/{contract_address}"
 
                     msg = (
@@ -83,6 +88,7 @@ if __name__ == "__main__":
                     )
 
                     send_telegram(msg)
+                    sent_tokens.add(contract_address)  # запоминаем, что уже отправляли
                 except Exception as e:
                     print(f"[ERROR] Format send error: {e}")
 
