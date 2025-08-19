@@ -1,10 +1,16 @@
 import requests
 import time
 import logging
+import os
+from datetime import datetime, timedelta
 
 # === CONFIG ===
 PING_TIMEOUT = 10
-FETCH_INTERVAL = 60  # каждые 60 сек
+FETCH_INTERVAL = 60   # проверка токенов раз в 60 сек
+HEARTBEAT_INTERVAL = 3600  # раз в час сообщение "бот на связи"
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID")
 
 # === Логгер ===
 logging.basicConfig(
@@ -13,9 +19,17 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
+# === Telegram ===
+def send_telegram_message(text: str):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "disable_web_page_preview": True}
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        logging.error(f"Telegram send error: {e}")
+
 # === DexScreener ===
 def fetch_from_dexscreener():
-    """Получаем токены Solana с DexScreener"""
     url = "https://api.dexscreener.com/latest/dex/search?q=solana"
     pairs = []
     try:
@@ -23,7 +37,7 @@ def fetch_from_dexscreener():
         data = r.json()
         if "pairs" in data and data["pairs"]:
             for p in data["pairs"]:
-                dex_id = p.get("dexId", "").lower()
+                dex_id = (p.get("dexId") or "").lower()
                 if dex_id in ["raydium", "orca", "meteora"]:
                     pairs.append({
                         "name": p.get("baseToken", {}).get("name"),
@@ -33,19 +47,16 @@ def fetch_from_dexscreener():
                         "liquidity": p.get("liquidity", {}).get("usd"),
                         "url": p.get("url")
                     })
-        else:
-            logging.warning("DexScreener: пустой ответ")
     except Exception as e:
         logging.error(f"DexScreener fetch error: {e}")
     return pairs
 
 # === PumpSwap ===
 def fetch_from_pumpswap():
-    """Получаем токены с PumpSwap"""
     url = "https://pumpportal.fun/api/trending"
     pairs = []
     try:
-        r = requests.get(url, timeout=PING_TIMEOUT)
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=PING_TIMEOUT)
         data = r.json()
         if isinstance(data, list) and len(data) > 0:
             for p in data:
@@ -57,8 +68,6 @@ def fetch_from_pumpswap():
                     "liquidity": None,
                     "url": f"https://dexscreener.com/solana/{p.get('mint')}"
                 })
-        else:
-            logging.warning("pumpswap: API вернул пустой ответ или неверный формат")
     except Exception as e:
         logging.error(f"pumpswap fetch error: {e}")
     return pairs
@@ -66,6 +75,10 @@ def fetch_from_pumpswap():
 # === Основной цикл ===
 def main():
     logging.info("Starting token fetcher...")
+    send_telegram_message("🚀 Бот запущен и слушает новые токены")
+
+    last_heartbeat = datetime.now()
+
     while True:
         all_tokens = []
         all_tokens.extend(fetch_from_dexscreener())
@@ -73,10 +86,16 @@ def main():
 
         if all_tokens:
             logging.info(f"Найдено {len(all_tokens)} токенов")
-            for t in all_tokens[:5]:  # показываем первые 5
-                logging.info(f"[{t['dex']}] {t['symbol']} ({t['address']}) {t['url']}")
+            for t in all_tokens[:5]:
+                msg = f"[{t['dex']}] {t['symbol']} ({t['address']})\n{t['url']}"
+                logging.info(msg)
         else:
             logging.info("Новых токенов не найдено")
+
+        # heartbeat раз в час
+        if datetime.now() - last_heartbeat >= timedelta(seconds=HEARTBEAT_INTERVAL):
+            send_telegram_message("✅ Бот на связи")
+            last_heartbeat = datetime.now()
 
         time.sleep(FETCH_INTERVAL)
 
