@@ -1,77 +1,68 @@
 import requests
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-# === CONFIG ===
-BOT_TOKEN = "ТОКЕН_ТЕЛЕГРАМ_БОТА"
-CHAT_ID = "ID_ТВОЕГО_ЧАТА"
+# ======================
+# 🔧 Настройки
+# ======================
+TG_TOKEN = "ТОКЕН_ТЕЛЕГРАМ"
+TG_CHAT_ID = "ID_ТЕЛЕГРАМ"
+STATUS_INTERVAL = 3600  # каждые 1 час бот пишет "на связи"
+BOOST_CHECK_MINUTES = 10  # проверка роста монеты
+BOOST_PERCENT = 30        # % роста для сигнала буста
 
-FETCH_INTERVAL = 60  # проверка каждую минуту
-BOOST_CHECK_MINUTES = 10
-BOOST_PERCENT = 20  # рост на 20% за 10 минут
-STATUS_INTERVAL = 3600  # 1 час
-
-# === Логгер ===
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-
-# === Хранилище цен (для буста) ===
+# Храним цены монет для проверки роста
 price_history = {}
-last_status_time = datetime.utcnow()
+last_status_time = datetime.now(timezone.utc)
 
-# === Telegram ===
-def send_tg(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+# ======================
+# 📩 Отправка сообщений
+# ======================
+def send_tg(msg: str):
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
+        requests.post(url, data={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"})
     except Exception as e:
         logging.error(f"Ошибка отправки в Telegram: {e}")
 
-# === DexScreener ===
+# ======================
+# 📊 Получение монет (пример DexScreener API)
+# ======================
 def fetch_from_dexscreener():
-    url = "https://api.dexscreener.com/latest/dex/search?q=solana"
-    pairs = []
     try:
+        url = "https://api.dexscreener.com/latest/dex/tokens"
         r = requests.get(url, timeout=10)
-        data = r.json()
-        if "pairs" in data and data["pairs"]:
-            for p in data["pairs"]:
-                dex_id = (p.get("dexId") or "").lower()
-                price = safe_float(p.get("priceUsd"))
-                change15m = safe_float(p.get("priceChange", {}).get("m15"))
+        if r.status_code != 200:
+            logging.error(f"Ошибка запроса DexScreener: {r.status_code}")
+            return []
 
-                token = {
-                    "name": p.get("baseToken", {}).get("name"),
-                    "symbol": p.get("baseToken", {}).get("symbol"),
-                    "address": p.get("baseToken", {}).get("address"),
-                    "dex": dex_id,
-                    "price": price,
-                    "change15m": change15m,
-                    "url": p.get("url"),
-                    "phantom": f"https://phantom.app/ul/browse/{p.get('baseToken', {}).get('address')}"
-                }
-                pairs.append(token)
+        data = r.json()
+        tokens = []
+        for pair in data.get("pairs", []):
+            tokens.append({
+                "symbol": pair.get("baseToken", {}).get("symbol", "N/A"),
+                "address": pair.get("baseToken", {}).get("address", "N/A"),
+                "price": float(pair.get("priceUsd", 0)),
+                "dex": pair.get("dexId", "N/A"),
+                "url": f"https://dexscreener.com/solana/{pair.get('pairAddress', '')}",
+                "phantom": f"https://phantom.app/ul/browse/{pair.get('pairAddress', '')}"
+            })
+        return tokens
+
     except Exception as e:
         logging.error(f"DexScreener fetch error: {e}")
-    return pairs
+        return []
 
-def safe_float(val):
-    try:
-        return float(val)
-    except:
-        return None
-
-# === Проверка буста ===
+# ======================
+# 🚀 Проверка на буст монеты
+# ======================
 def check_boost(token):
     addr = token["address"]
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     price = token["price"]
 
-    if not price:
+    if not price or price <= 0:
         return None
 
     if addr in price_history:
@@ -79,12 +70,14 @@ def check_boost(token):
         if now - ts >= timedelta(minutes=BOOST_CHECK_MINUTES):
             change = ((price - old_price) / old_price) * 100 if old_price > 0 else 0
             if change >= BOOST_PERCENT:
-                return f"🚀 <b>ОБНАРУЖЕН БУСТ МОНЕТА!</b>\n" \
-                       f"<b>{token['symbol']}</b> ({token['address']})\n" \
-                       f"DEX: {token['dex']}\n" \
-                       f"Цена: ${price:.6f} (+{change:.2f}% за {BOOST_CHECK_MINUTES} мин)\n" \
-                       f"<a href='{token['url']}'>DexScreener</a>\n" \
-                       f"<a href='{token['phantom']}'>Phantom</a>"
+                return (
+                    f"🚀 <b>ОБНАРУЖЕН БУСТ МОНЕТА!</b>\n"
+                    f"<b>{token['symbol']}</b> ({token['address']})\n"
+                    f"DEX: {token['dex']}\n"
+                    f"Цена: ${price:.6f} (+{change:.2f}% за {BOOST_CHECK_MINUTES} мин)\n"
+                    f"<a href='{token['url']}'>DexScreener</a>\n"
+                    f"<a href='{token['phantom']}'>Phantom</a>"
+                )
             else:
                 price_history[addr] = (price, now)
     else:
@@ -92,7 +85,9 @@ def check_boost(token):
 
     return None
 
-# === Основной цикл ===
+# ======================
+# 🔄 Основной цикл
+# ======================
 def main():
     global last_status_time
     send_tg("✅ Бот запущен и отслеживает новые монеты")
@@ -100,30 +95,20 @@ def main():
     while True:
         tokens = fetch_from_dexscreener()
 
-        # раз в час - сигнал "бот на связи"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if (now - last_status_time).total_seconds() >= STATUS_INTERVAL:
             send_tg("⏰ Бот на связи")
             last_status_time = now
 
-        if tokens:
-            for t in tokens[:5]:
-                msg = f"🆕 <b>Новая монета</b>\n" \
-                      f"<b>{t['symbol']}</b> ({t['address']})\n" \
-                      f"DEX: {t['dex']}\n" \
-                      f"Цена: ${t['price']:.6f}\n" \
-                      f"Δ15m: {t['change15m']}%\n" \
-                      f"<a href='{t['url']}'>DexScreener</a>\n" \
-                      f"<a href='{t['phantom']}'>Phantom</a>"
-                send_tg(msg)
+        for token in tokens:
+            boost_msg = check_boost(token)
+            if boost_msg:
+                send_tg(boost_msg)
 
-                # проверка на буст
-                boost_msg = check_boost(t)
-                if boost_msg:
-                    send_tg(boost_msg)
-
-        time.sleep(FETCH_INTERVAL)
+        time.sleep(30)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.info("Starting Container")
     main()
