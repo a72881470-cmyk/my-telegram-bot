@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 
 # === CONFIG ===
 PING_TIMEOUT = 10
-FETCH_INTERVAL = 60   # проверка токенов раз в 60 сек
-HEARTBEAT_INTERVAL = 3600  # раз в час сообщение "бот на связи"
+FETCH_INTERVAL = 60    # проверка раз в 60 сек
+HEARTBEAT_INTERVAL = 3600  # каждые 3600 сек (1 час)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID")
@@ -30,6 +30,7 @@ def send_telegram_message(text: str):
 
 # === DexScreener ===
 def fetch_from_dexscreener():
+    """Получаем токены Solana с DexScreener"""
     url = "https://api.dexscreener.com/latest/dex/search?q=solana"
     pairs = []
     try:
@@ -39,20 +40,27 @@ def fetch_from_dexscreener():
             for p in data["pairs"]:
                 dex_id = (p.get("dexId") or "").lower()
                 if dex_id in ["raydium", "orca", "meteora"]:
+                    change15m = p.get("priceChange", {}).get("h15")
                     pairs.append({
                         "name": p.get("baseToken", {}).get("name"),
                         "symbol": p.get("baseToken", {}).get("symbol"),
                         "address": p.get("baseToken", {}).get("address"),
                         "dex": dex_id,
                         "liquidity": p.get("liquidity", {}).get("usd"),
-                        "url": p.get("url")
+                        "price": p.get("priceUsd"),
+                        "change15m": change15m,
+                        "url": p.get("url"),
+                        "phantom": f"https://phantom.app/ul/browse/{p.get('baseToken', {}).get('address')}"
                     })
+        else:
+            logging.warning("DexScreener: пустой ответ")
     except Exception as e:
         logging.error(f"DexScreener fetch error: {e}")
     return pairs
 
 # === PumpSwap ===
 def fetch_from_pumpswap():
+    """Получаем токены с PumpSwap"""
     url = "https://pumpportal.fun/api/trending"
     pairs = []
     try:
@@ -60,14 +68,20 @@ def fetch_from_pumpswap():
         data = r.json()
         if isinstance(data, list) and len(data) > 0:
             for p in data:
+                addr = p.get("mint")
                 pairs.append({
                     "name": p.get("name"),
                     "symbol": p.get("symbol"),
-                    "address": p.get("mint"),
+                    "address": addr,
                     "dex": "pumpswap",
                     "liquidity": None,
-                    "url": f"https://dexscreener.com/solana/{p.get('mint')}"
+                    "price": None,
+                    "change15m": None,
+                    "url": f"https://dexscreener.com/solana/{addr}",
+                    "phantom": f"https://phantom.app/ul/browse/{addr}"
                 })
+        else:
+            logging.warning("pumpswap: API вернул пустой ответ или неверный формат")
     except Exception as e:
         logging.error(f"pumpswap fetch error: {e}")
     return pairs
@@ -78,7 +92,7 @@ def main():
     send_telegram_message("🚀 Бот запущен и слушает новые токены")
 
     last_heartbeat = datetime.now()
-    seen_tokens = set()  # чтобы не спамить одинаковыми токенами
+    seen_tokens = set()
 
     while True:
         all_tokens = []
@@ -87,17 +101,51 @@ def main():
 
         if all_tokens:
             logging.info(f"Найдено {len(all_tokens)} токенов")
-            for t in all_tokens[:5]:
+            for t in all_tokens[:5]:  # первые 5
                 token_id = f"{t['dex']}:{t['address']}"
-                if token_id not in seen_tokens:  # только новые токены
+                if token_id not in seen_tokens:
                     seen_tokens.add(token_id)
-                    msg = f"[{t['dex']}] {t['symbol']} ({t['address']})\n{t['url']}"
-                    logging.info(msg)
+
+                    msg = f"🔹 [{t['dex'].upper()}] {t['symbol']} ({t['address']})\n"
+
+                    # Цена
+                    if t["price"]:
+                        try:
+                            price = float(t["price"])
+                            msg += f"💵 Цена: ${price:.6f}\n"
+                        except:
+                            msg += f"💵 Цена: {t['price']}\n"
+
+                    # Ликвидность
+                    if t["liquidity"]:
+                        try:
+                            liquidity = float(t["liquidity"])
+                            msg += f"💧 Ликвидность: ${liquidity:,.0f}\n"
+                        except:
+                            msg += f"💧 Ликвидность: {t['liquidity']}\n"
+
+                    # Рост за 15 мин
+                    if t["change15m"] is not None:
+                        try:
+                            change = float(t["change15m"])
+                            if change > 0:
+                                msg += f"📊 Рост за 15 мин: 🔺 {change:.2f}%\n"
+                            elif change < 0:
+                                msg += f"📊 Рост за 15 мин: 🔻 {change:.2f}%\n"
+                            else:
+                                msg += f"📊 Рост за 15 мин: ➖ 0.00%\n"
+                        except:
+                            msg += f"📊 Рост за 15 мин: {t['change15m']}\n"
+
+                    msg += f"🔗 Dex: {t['url']}\n"
+                    msg += f"👛 Phantom: {t['phantom']}"
+
+                    logging.info(msg.replace("\n", " | "))
                     send_telegram_message(msg)
         else:
             logging.info("Новых токенов не найдено")
 
-        # heartbeat раз в час
+        # Heartbeat раз в час
         if datetime.now() - last_heartbeat >= timedelta(seconds=HEARTBEAT_INTERVAL):
             send_telegram_message("✅ Бот на связи")
             last_heartbeat = datetime.now()
