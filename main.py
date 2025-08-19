@@ -31,10 +31,17 @@ LIQ_DROP_RUG_PCT = float(os.getenv("LIQ_DROP_RUG_PCT", 50))
 # === DexScreener API ===
 DEX_API = "https://api.dexscreener.com/latest/dex/tokens/"
 
+
 # Telegram API
 def send_telegram(msg: str, buttons=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+
+    # Универсальная обработка chat_id
+    chat_id = CHAT_ID.strip() if CHAT_ID else None
+    if chat_id and chat_id.lstrip("-").isdigit():
+        chat_id = int(chat_id)
+
+    data = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
     if buttons:
         data["reply_markup"] = buttons
     try:
