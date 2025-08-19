@@ -19,7 +19,7 @@ MIN_BUYS_RATIO_5M = 0.55       # минимум 55% покупок
 MIN_PCHANGE_5M_BUY= 3          # минимум рост 3% за 5м
 MIN_PCHANGE_5M_ALERT=10        # 🚀 сигнал если рост >10% за 5м
 
-# === Слежение и выход (оставляем на будущее) ===
+# === Слежение и выход ===
 TRAIL_START_PCT   = 20
 TRAIL_GAP_PCT     = 15
 MAX_DRAWNDOWN_PCT = 30
@@ -44,16 +44,22 @@ def send_telegram(text: str):
 
 # === DexScreener API ===
 def fetch_new_tokens():
-    try:
-        url = "https://api.dexscreener.com/latest/dex/search?q=solana"
-        r = requests.get(url, timeout=PING_TIMEOUT)
-        data = r.json()
-        if "pairs" not in data:
-            return []
-        return data["pairs"]
-    except Exception as e:
-        print(f"[ERROR] DexScreener fetch error: {e}")
-        return []
+    pairs = []
+    urls = {
+        "default": "https://api.dexscreener.com/latest/dex/search?q=solana",
+        "pumpswap": "https://api.dexscreener.com/latest/dex/pairs/solana/pumpswap"
+    }
+    for label, url in urls.items():
+        try:
+            r = requests.get(url, timeout=PING_TIMEOUT)
+            data = r.json()
+            if "pairs" in data:
+                for p in data["pairs"]:
+                    p["_source"] = label  # отмечаем источник
+                    pairs.append(p)
+        except Exception as e:
+            print(f"[ERROR] DexScreener fetch error from {url}: {e}")
+    return pairs
 
 # === Flask healthcheck server ===
 app = Flask(__name__)
@@ -67,9 +73,7 @@ def run_server():
 
 # === MAIN ===
 if __name__ == "__main__":
-    # Запускаем веб-сервер в отдельном потоке
     threading.Thread(target=run_server, daemon=True).start()
-
     send_telegram("🚀 Бот запущен и фильтрует Solana-мемы по условиям!")
 
     sent_tokens = set()
@@ -116,8 +120,10 @@ if __name__ == "__main__":
                             url_phantom = f"https://phantom.com/tokens/solana/{contract_address}"
 
                             alert_emoji = "🚀" if price_change5m >= MIN_PCHANGE_5M_ALERT else "✅"
+                            source_note = "🔥PUMPSWAP🔥" if p.get("_source") == "pumpswap" else ""
+
                             msg = (
-                                f"{alert_emoji} <b>{symbol}</b>\n"
+                                f"{alert_emoji} <b>{symbol}</b> {source_note}\n"
                                 f"⏱ Возраст: {age_min} мин\n"
                                 f"💧 Ликвидность: ${liquidity_usd}\n"
                                 f"📊 FDV: ${fdv}\n"
