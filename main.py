@@ -4,7 +4,13 @@ import requests
 import threading
 from dotenv import load_dotenv
 from flask import Flask
-from waitress import serve
+
+# === Пытаемся импортировать waitress ===
+try:
+    from waitress import serve
+    USE_WAITRESS = True
+except ImportError:
+    USE_WAITRESS = False
 
 # === Загружаем .env ===
 load_dotenv()
@@ -58,10 +64,14 @@ def fetch_new_tokens():
         try:
             r = requests.get(url, timeout=PING_TIMEOUT)
             data = r.json()
-            if "pairs" in data:
+
+            if data and isinstance(data, dict) and "pairs" in data and data["pairs"]:
                 for p in data["pairs"]:
                     p["_source"] = label  # отмечаем источник
                     pairs.append(p)
+            else:
+                print(f"[WARN] {label}: API вернул пустой ответ или без pairs")
+
         except Exception as e:
             print(f"[ERROR] DexScreener fetch error from {url}: {e}")
     return pairs
@@ -74,7 +84,10 @@ def health():
     return "✅ Bot is running", 200
 
 def run_server():
-    serve(app, host="0.0.0.0", port=PORT)
+    if USE_WAITRESS:
+        serve(app, host="0.0.0.0", port=PORT)
+    else:
+        app.run(host="0.0.0.0", port=PORT)
 
 # === MAIN ===
 if __name__ == "__main__":
