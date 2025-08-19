@@ -4,13 +4,7 @@ import requests
 import threading
 from dotenv import load_dotenv
 from flask import Flask
-
-# === Пытаемся импортировать waitress ===
-try:
-    from waitress import serve
-    USE_WAITRESS = True
-except ImportError:
-    USE_WAITRESS = False
+from waitress import serve
 
 # === Загружаем .env ===
 load_dotenv()
@@ -57,21 +51,21 @@ def fetch_new_tokens():
     """Забираем новые токены с DexScreener"""
     pairs = []
     urls = {
-        "default": "https://api.dexscreener.com/latest/dex/search?q=solana",
-        "pumpswap": "https://api.dexscreener.com/latest/dex/pairs/solana/pumpswap"
+        "search":   "https://api.dexscreener.com/latest/dex/search?q=solana",
+        "raydium":  "https://api.dexscreener.com/latest/dex/pairs/solana/raydium",
+        "orca":     "https://api.dexscreener.com/latest/dex/pairs/solana/orca",
+        "meteora":  "https://api.dexscreener.com/latest/dex/pairs/solana/meteora"
     }
     for label, url in urls.items():
         try:
             r = requests.get(url, timeout=PING_TIMEOUT)
             data = r.json()
-
-            if data and isinstance(data, dict) and "pairs" in data and data["pairs"]:
+            if "pairs" in data:
                 for p in data["pairs"]:
-                    p["_source"] = label  # отмечаем источник
+                    p["_source"] = label  # отмечаем источник (DEX)
                     pairs.append(p)
             else:
-                print(f"[WARN] {label}: API вернул пустой ответ или без pairs")
-
+                print(f"[WARN] {label}: API вернул пустой ответ")
         except Exception as e:
             print(f"[ERROR] DexScreener fetch error from {url}: {e}")
     return pairs
@@ -84,10 +78,7 @@ def health():
     return "✅ Bot is running", 200
 
 def run_server():
-    if USE_WAITRESS:
-        serve(app, host="0.0.0.0", port=PORT)
-    else:
-        app.run(host="0.0.0.0", port=PORT)
+    serve(app, host="0.0.0.0", port=PORT)
 
 # === MAIN ===
 if __name__ == "__main__":
@@ -138,10 +129,11 @@ if __name__ == "__main__":
                             url_phantom = f"https://phantom.com/tokens/solana/{contract_address}"
 
                             alert_emoji = "🚀" if price_change5m >= MIN_PCHANGE_5M_ALERT else "✅"
-                            source_note = "🔥PUMPSWAP🔥" if p.get("_source") == "pumpswap" else ""
+                            dex_source  = p.get("_source", "").capitalize()
 
                             msg = (
-                                f"{alert_emoji} <b>{symbol}</b> {source_note}\n"
+                                f"{alert_emoji} <b>{symbol}</b>\n"
+                                f"🌐 DEX: {dex_source}\n"
                                 f"⏱ Возраст: {age_min} мин\n"
                                 f"💧 Ликвидность: ${liquidity_usd}\n"
                                 f"📊 FDV: ${fdv}\n"
