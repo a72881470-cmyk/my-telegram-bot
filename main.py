@@ -103,7 +103,8 @@ def check_boost(token):
 # ======================
 def main():
     global last_status_time
-    send_tg("✅ Бот запущен и отслеживает новые монеты со всех DEX'ов")
+    dex_list_str = ", ".join(DEX_LIST)
+    send_tg(f"✅ Бот запущен\n📡 Отслеживаются DEX'ы: <b>{dex_list_str}</b>")
 
     while True:
         tokens = fetch_from_dexscreener()
@@ -120,8 +121,17 @@ def main():
 
         time.sleep(30)
 
-
+# ======================
+# 🚀 Запуск с защитой от падения
+# ======================
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     logging.info("Starting Container")
-    main()
+
+    while True:
+        try:
+            main()
+        except Exception as e:
+            logging.exception(f"❌ Ошибка в main(): {e}")
+            send_tg(f"⚠️ Бот поймал ошибку: {e}\nПерезапуск через 10 сек...")
+            time.sleep(10)
