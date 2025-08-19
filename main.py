@@ -1,90 +1,162 @@
-import requests
+import asyncio
+import json
+import os
 import time
-from datetime import datetime, timezone
+from urllib.parse import quote
 
-# ------------------- НАСТРОЙКИ -------------------
-BOT_TOKEN = "ТВОЙ_ТОКЕН_БОТА"
-CHAT_ID = "ТВОЙ_CHAT_ID"
+import requests
+import websockets
+from dotenv import load_dotenv
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 
-API_URL = "https://api.dexscreener.com/latest/dex/tokens/"
-WATCH_TOKEN = "0x..."   # контракт монеты которую мониторим
+# === Загружаем .env ===
+load_dotenv()
 
-CHECK_INTERVAL = 30  # проверка каждые 30 секунд
-# -------------------------------------------------
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+bot = Bot(token=BOT_TOKEN)
 
-def send_telegram(msg: str):
-    """Отправка сообщения в Telegram"""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        r = requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=10)
-        if r.status_code != 200:
-            print(f"⚠ Ошибка отправки в Telegram: {r.text}")
-    except Exception as e:
-        print("⚠ Исключение при отправке в Telegram:", e)
+# === API ===
+PUMP_WS = "wss://pumpportal.fun/api/data"
+DEX_API = "https://api.dexscreener.com/token-pairs/v1/solana/{mint}"
 
+# === Настройки ===
+PUMP_ALERT_PCT = 100.0     # сигнал на рост
+DROP_ALERT_PCT = 100.0     # сигнал на падение
+TRACK_SECONDS = 6 * 60 * 60  # следим 6 часов за токеном
 
-def check_token():
-    """Проверка токена на Dexscreener"""
-    try:
-        url = API_URL + WATCH_TOKEN
-        r = requests.get(url, timeout=10)
-
-        if r.status_code != 200:
-            print(f"⚠ Ошибка API Dexscreener: {r.status_code}")
-            return
-
-        data = r.json()
-
-        # Проверка структуры ответа
-        if not data or "pairs" not in data or not data["pairs"]:
-            print("⚠ Монета не найдена или API вернул пустой ответ")
-            return
-
-        pair = data["pairs"][0]
-
-        # -------- Возраст пары --------
-        created_at = pair.get("pairCreatedAt")
-        created_dt = None
-
-        if isinstance(created_at, int):  # timestamp в ms
-            created_dt = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
-        elif isinstance(created_at, str):  # ISO8601
-            try:
-                created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            except Exception:
-                created_dt = datetime.now(timezone.utc)
-        else:
-            created_dt = datetime.now(timezone.utc)
-
-        age_min = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60
-        # ------------------------------
-
-        # Данные о цене
-        price = pair.get("priceUsd") or "N/A"
-        symbol = pair.get("baseToken", {}).get("symbol", "?")
-        url_dex = pair.get("url", "Нет ссылки")
-
-        msg = (
-            f"🚨 Найден токен {symbol}\n"
-            f"💰 Цена: {price} USD\n"
-            f"⏱ Возраст пары: {age_min:.1f} минут\n"
-            f"🌐 Dexscreener: {url_dex}"
-        )
-
-        print(msg)
-        send_telegram(msg)
-
-    except Exception as e:
-        print("⚠ Ошибка проверки токена:", e)
+tokens = {}  # mint -> dict
 
 
-def main():
-    print("✅ Бот запущен, слежение за монетой...")
+def percent_change(old, new):
+    return (new / old - 1) * 100 if old > 0 else 0
+
+
+def nice_price(price):
+    return f"{price:.8f}".rstrip("0").rstrip(".")
+
+
+def phantom_link(mint):
+    buy = quote(f"solana:101/address:{mint}", safe="")
+    sell = quote("solana:101/address:So11111111111111111111111111111111111111112", safe="")
+    return f"https://phantom.app/ul/v1/swap?buy={buy}&sell={sell}"
+
+
+async def send_signal(mint, title, text, price, pair_url):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🟣 Купить в Phantom", url=phantom_link(mint))],
+        [InlineKeyboardButton("🌐 Dexscreener", url=pair_url)]
+    ])
+
+    msg = (
+        f"<b>{title}</b>\n"
+        f"{text}\n"
+        f"💵 Цена: <code>{nice_price(price)}</code>\n"
+        f"🔗 <a href=\"{pair_url}\">Dexscreener</a>"
+    )
+
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text=msg,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=kb
+    )
+
+
+async def handle_new_token(mint, name, symbol):
+    url = DEX_API.format(mint=mint)
+    r = requests.get(url, timeout=10)
+    if r.status_code != 200:
+        return
+    pairs = r.json()
+    if not pairs:
+        return
+    p = pairs[0]
+
+    price = float(p.get("priceUsd") or 0)
+    if price <= 0:
+        return
+
+    tokens[mint] = {
+        "name": name or mint[:6],
+        "symbol": symbol or "",
+        "first_price": price,
+        "last_price": price,
+        "high": price,
+        "pair_url": p.get("url", ""),
+        "created_at": time.time(),
+        "pump": False,
+        "drop": False,
+    }
+
+    await send_signal(
+        mint,
+        "🆕 Новый токен",
+        f"🎯 {tokens[mint]['name']} ({tokens[mint]['symbol']})",
+        price,
+        tokens[mint]["pair_url"]
+    )
+
+
+async def watcher():
     while True:
-        check_token()
-        time.sleep(CHECK_INTERVAL)
+        now = time.time()
+        for mint, t in list(tokens.items()):
+            if now - t["created_at"] > TRACK_SECONDS:
+                tokens.pop(mint, None)
+                continue
+
+            # обновим цену
+            r = requests.get(DEX_API.format(mint=mint), timeout=10)
+            if r.status_code != 200:
+                continue
+            pairs = r.json()
+            if not pairs:
+                continue
+            price = float(pairs[0].get("priceUsd") or 0)
+            if price <= 0:
+                continue
+
+            t["last_price"] = price
+            if price > t["high"]:
+                t["high"] = price
+
+            # 🚀 сигнал при росте +100% от старта
+            change = percent_change(t["first_price"], price)
+            if not t["pump"] and change >= PUMP_ALERT_PCT:
+                t["pump"] = True
+                await send_signal(mint, "🚀 Рост", f"⤴️ +{change:.1f}% от старта", price, t["pair_url"])
+
+            # 🔻 сигнал при падении −100% от хая
+            drop = percent_change(t["high"], price)
+            if not t["drop"] and drop <= -DROP_ALERT_PCT:
+                t["drop"] = True
+                await send_signal(mint, "🔻 Падение", f"⤵️ {drop:.1f}% от хая", price, t["pair_url"])
+
+        await asyncio.sleep(20)
+
+
+async def pump_listener():
+    async with websockets.connect(PUMP_WS) as ws:
+        await ws.send(json.dumps({"method": "subscribeNewToken"}))
+        async for msg in ws:
+            data = json.loads(msg)
+            if isinstance(data, dict) and data.get("type") == "new-token":
+                mint = data.get("mint")
+                name = data.get("name")
+                symbol = data.get("symbol")
+                await handle_new_token(mint, name, symbol)
+
+
+async def main():
+    await asyncio.gather(
+        pump_listener(),
+        watcher()
+    )
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
