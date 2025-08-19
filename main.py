@@ -35,6 +35,10 @@ TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram(text: str):
+    """Отправка сообщения в Telegram"""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[ERROR] Нет TELEGRAM_TOKEN или TELEGRAM_CHAT_ID")
+        return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
@@ -44,6 +48,7 @@ def send_telegram(text: str):
 
 # === DexScreener API ===
 def fetch_new_tokens():
+    """Забираем новые токены с DexScreener"""
     pairs = []
     urls = {
         "default": "https://api.dexscreener.com/latest/dex/search?q=solana",
@@ -133,6 +138,9 @@ if __name__ == "__main__":
                             )
                             send_telegram(msg)
                             sent_tokens.add(contract_address)
+
+                    except Exception as inner_e:
+                        print(f"[ERROR] Ошибка при обработке токена: {inner_e}")
 
             else:
                 print("⏳ Пока чисто, жду дальше...")  
