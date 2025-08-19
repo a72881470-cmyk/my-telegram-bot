@@ -1,105 +1,67 @@
-import requests
-import time
-from datetime import datetime, timezone
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+import requests
+from telegram import Bot
+from telegram.ext import Updater, CommandHandler
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-API_URL = "https://api.dexscreener.com/latest/dex/search?q=solana"
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 30))
+bot = Bot(token=BOT_TOKEN)
 
-NEW_MAX_AGE_MIN = int(os.getenv("NEW_MAX_AGE_MIN", 180))
-MIN_LIQ_USD = int(os.getenv("MIN_LIQ_USD", 10000))
-MAX_LIQ_USD = int(os.getenv("MAX_LIQ_USD", 5000000))
+DEX_API = "https://api.dexscreener.com/latest/dex/tokens/solana"
 
-MIN_PCHANGE_5M_ALERT = int(os.getenv("MIN_PCHANGE_5M_ALERT", 10))
-BIG_PUMP_ALERT = int(os.getenv("BIG_PUMP_ALERT", 100))
-BIG_DUMP_ALERT = int(os.getenv("BIG_DUMP_ALERT", 50))
+def start(update, context):
+    update.message.reply_text("✅ Бот Solana запущен и мониторит новые токены!")
 
-PHANTOM_DEPOSIT_USD = int(os.getenv("PHANTOM_DEPOSIT_USD", 20))
-
-tracked_tokens = {}
-
-def send_telegram(msg: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+def check_new_tokens(context):
     try:
-        r = requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=10)
-        if r.status_code != 200:
-            print(f"⚠ Ошибка TG: {r.text}")
-    except Exception as e:
-        print("⚠ Ошибка отправки в TG:", e)
+        response = requests.get(DEX_API)
+        data = response.json()
 
-def check_new_tokens():
-    try:
-        r = requests.get(API_URL, timeout=10)
-        if r.status_code != 200:
-            print(f"⚠ Ошибка API: {r.status_code}")
-            return
-
-        data = r.json()
         if "pairs" not in data:
-            print("⚠ Dexscreener вернул пусто")
             return
 
-        for pair in data["pairs"]:
-            created_at = pair.get("pairCreatedAt")
-            if not created_at:
-                continue
+        for token in data["pairs"][:3]:  # первые 3 токена
+            name = token.get("baseToken", {}).get("name", "Unknown")
+            symbol = token.get("baseToken", {}).get("symbol", "?")
+            price = token.get("priceUsd", "0")
+            url = f"https://dexscreener.com/solana/{token.get('pairAddress')}"
 
-            age_min = (datetime.now(timezone.utc) - datetime.fromtimestamp(created_at/1000, tz=timezone.utc)).total_seconds() / 60
-            if age_min > NEW_MAX_AGE_MIN:
-                continue
+            msg = (
+                f"🚀 Новый токен на Solana\n"
+                f"💎 {name} ({symbol})\n"
+                f"💲 Цена: {price} USD\n"
+                f"📊 Пара: {token.get('baseToken', {}).get('symbol')} / {token.get('quoteToken', {}).get('symbol')}\n"
+                f"🔗 [DexScreener]({url})\n\n"
+                f"💸 Погнали фармить деньги!"
+            )
 
-            liq_usd = float(pair.get("liquidity", {}).get("usd", 0))
-            if liq_usd < MIN_LIQ_USD or liq_usd > MAX_LIQ_USD:
-                continue
-
-            price = float(pair.get("priceUsd") or 0)
-            pchange_5m = float(pair.get("priceChange", {}).get("m5", 0))
-            symbol = pair.get("baseToken", {}).get("symbol", "?")
-            address = pair.get("baseToken", {}).get("address", "?")
-            url_dex = pair.get("url", "")
-
-            # 🚀 сигнал на новый токен
-            if abs(pchange_5m) >= MIN_PCHANGE_5M_ALERT and address not in tracked_tokens:
-                msg = (
-                    f"🚀 Новый токен на Solana\n\n"
-                    f"🪙 {symbol} ({address})\n"
-                    f"💰 Цена: {price:.6f} USD\n"
-                    f"📈 Рост (5м): {pchange_5m}%\n"
-                    f"🌐 Dex: {url_dex}\n"
-                    f"👛 Phantom: https://phantom.app/ul/buy/solana/{address}?amount={PHANTOM_DEPOSIT_USD}"
-                )
-                send_telegram(msg)
-                tracked_tokens[address] = {"peak": price, "symbol": symbol, "url": url_dex}
-
-            # отслеживание роста/падения
-            if address in tracked_tokens:
-                peak = tracked_tokens[address]["peak"]
-                if price > peak:
-                    tracked_tokens[address]["peak"] = price
-                    if ((price - peak) / peak) * 100 > BIG_PUMP_ALERT:
-                        send_telegram(f"🚀 {symbol} ВЗОРВАЛСЯ +100%!\nЦена: {price:.6f} USD\n🔗 {url_dex}")
-
-                drawdown = 100 * (1 - price / tracked_tokens[address]["peak"])
-                if drawdown > BIG_DUMP_ALERT:
-                    send_telegram(f"⚠ {symbol} Обвалился {drawdown:.1f}%\nЦена: {price:.6f} USD\n🔗 {url_dex}")
-                    del tracked_tokens[address]
+            bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode="Markdown")
 
     except Exception as e:
-        print("⚠ Ошибка:", e)
+        print("Ошибка при получении данных:", e)
 
+def keep_alive(context):
+    """Сообщение каждые 2 часа"""
+    bot.send_message(chat_id=CHANNEL_ID, text="🤖 Я работаю, мониторю рынок...")
 
 def main():
-    print("✅ Бот Solana запущен")
-    while True:
-        check_new_tokens()
-        time.sleep(CHECK_INTERVAL)
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
+    dp.add_handler(CommandHandler("start", start))
+
+    job_queue = updater.job_queue
+
+    # проверка новых токенов каждую минуту
+    job_queue.run_repeating(check_new_tokens, interval=60, first=5)
+
+    # сообщение "Я работаю" каждые 2 часа (7200 секунд)
+    job_queue.run_repeating(keep_alive, interval=7200, first=10)
+
+    print("✅ Бот Solana запущен и работает бесконечно")
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
