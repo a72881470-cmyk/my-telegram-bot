@@ -41,20 +41,28 @@ def fetch_from_dexscreener():
         try:
             url = f"https://api.dexscreener.com/latest/dex/search/?q={dex}"
             r = requests.get(url, timeout=10)
+
+            if r.status_code == 404:
+                logging.warning(f"❌ Нет данных для {dex} (404)")
+                continue
             if r.status_code != 200:
                 logging.error(f"Ошибка запроса {dex}: {r.status_code}")
                 continue
 
             data = r.json()
             for pair in data.get("pairs", []):
-                tokens.append({
-                    "symbol": pair.get("baseToken", {}).get("symbol", "N/A"),
-                    "address": pair.get("baseToken", {}).get("address", "N/A"),
-                    "price": float(pair.get("priceUsd", 0) or 0),
-                    "dex": pair.get("dexId", "N/A"),
-                    "url": f"https://dexscreener.com/solana/{pair.get('pairAddress', '')}",
-                    "phantom": f"https://phantom.app/ul/browse/{pair.get('pairAddress', '')}"
-                })
+                try:
+                    tokens.append({
+                        "symbol": pair.get("baseToken", {}).get("symbol", "N/A"),
+                        "address": pair.get("baseToken", {}).get("address", "N/A"),
+                        "price": float(pair.get("priceUsd", 0) or 0),
+                        "dex": pair.get("dexId", dex),
+                        "url": f"https://dexscreener.com/solana/{pair.get('pairAddress', '')}",
+                        "phantom": f"https://phantom.app/ul/browse/{pair.get('pairAddress', '')}"
+                    })
+                except Exception as e:
+                    logging.warning(f"Ошибка обработки пары {dex}: {e}")
+
         except Exception as e:
             logging.error(f"DexScreener fetch error {dex}: {e}")
     return tokens
