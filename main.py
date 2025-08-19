@@ -1,109 +1,82 @@
-import os
-import logging
 import requests
+import time
 from datetime import datetime, timezone
-from dotenv import load_dotenv
-from telegram import Bot
-from flask import Flask, request
+import os
 
-# Загружаем .env
-load_dotenv()
+# ------------------- НАСТРОЙКИ -------------------
+BOT_TOKEN = "ТВОЙ_ТОКЕН_БОТА"
+CHAT_ID = "ТВОЙ_CHAT_ID"
 
-# Логирование
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+API_URL = "https://api.dexscreener.com/latest/dex/tokens/"
+WATCH_TOKEN = "0x..."   # контракт монеты которую мониторим
 
-# Конфиг
-NEW_MAX_AGE_MIN = 180
-MIN_LIQ_USD = 10000
-MAX_LIQ_USD = 5000000
-MAX_FDV_USD = 50000000
-MIN_TXNS_5M = 10
-MIN_BUYS_RATIO_5M = 0.45
-MIN_PCHANGE_5M_BUY = 1
-MIN_PCHANGE_5M_ALERT = 5
+CHECK_INTERVAL = 30  # проверка каждые 30 секунд
+# -------------------------------------------------
 
-# Telegram
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-bot = Bot(token=TELEGRAM_TOKEN)
 
-# Flask (для Heroku/PaaS)
-app = Flask(__name__)
-
-DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/pairs/solana"
-
-def fetch_pairs():
+def send_telegram(msg: str):
+    """Отправка сообщения в Telegram"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        resp = requests.get(DEXSCREENER_API, timeout=10)
-        if resp.status_code == 200:
-            return resp.json().get("pairs", [])
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
     except Exception as e:
-        logging.error(f"Ошибка API Dexscreener: {e}")
-    return []
+        print("Ошибка отправки в Telegram:", e)
 
-def process_pairs():
-    pairs = fetch_pairs()
-    if not pairs:
-        return
 
-    for pair in pairs:
-        try:
-            base_token = pair["baseToken"]["symbol"]
-            liquidity_usd = float(pair.get("liquidity", {}).get("usd", 0))
-            fdv = float(pair.get("fdv", 0))
-            txns5m = int(pair.get("txns", {}).get("m5", {}).get("buys", 0)) + int(pair.get("txns", {}).get("m5", {}).get("sells", 0))
-            buys = int(pair.get("txns", {}).get("m5", {}).get("buys", 0))
-            ratio_buys = buys / txns5m if txns5m > 0 else 0
-            price_change_5m = float(pair.get("priceChange", {}).get("m5", 0))
+def check_token():
+    """Проверка токена на Dexscreener"""
+    try:
+        url = API_URL + WATCH_TOKEN
+        r = requests.get(url, timeout=10)
+        data = r.json()
 
-            # ---------------- ФИКС возраста ----------------
-            created_at = pair.get("pairCreatedAt")
-            if isinstance(created_at, int):  # timestamp (ms)
-                created_dt = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
-            elif isinstance(created_at, str):  # ISO
+        if "pairs" not in data or len(data["pairs"]) == 0:
+            print("⚠ Монета не найдена")
+            return
+
+        pair = data["pairs"][0]
+
+        # -------- Возраст пары --------
+        created_at = pair.get("pairCreatedAt")
+        created_dt = None
+
+        if isinstance(created_at, int):  # timestamp в ms
+            created_dt = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
+        elif isinstance(created_at, str):  # иногда ISO
+            try:
                 created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            else:
+            except Exception:
                 created_dt = datetime.now(timezone.utc)
-            age_min = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60
-            # ------------------------------------------------
+        else:
+            created_dt = datetime.now(timezone.utc)
 
-            # Фильтрация
-            if not (liquidity_usd >= MIN_LIQ_USD and liquidity_usd <= MAX_LIQ_USD):
-                continue
-            if fdv > MAX_FDV_USD:
-                continue
-            if txns5m < MIN_TXNS_5M:
-                continue
-            if ratio_buys < MIN_BUYS_RATIO_5M:
-                continue
-            if age_min > NEW_MAX_AGE_MIN:
-                continue
+        age_min = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60
+        # ------------------------------
 
-            # Сигнал
-            if price_change_5m >= MIN_PCHANGE_5M_ALERT:
-                message = (
-                    f"🚀 Новый сигнал!\n\n"
-                    f"Монета: {base_token}\n"
-                    f"Цена изм. 5м: {price_change_5m:.2f}%\n"
-                    f"Ликвидность: ${liquidity_usd:,.0f}\n"
-                    f"FDV: ${fdv:,.0f}\n"
-                    f"Сделки (5м): {txns5m}\n"
-                    f"Buy Ratio: {ratio_buys:.2%}\n"
-                    f"Возраст: {age_min:.1f} мин\n"
-                    f"🔗 {pair.get('url')}"
-                )
-                bot.send_message(chat_id=CHAT_ID, text=message)
+        # Данные о цене
+        price = pair.get("priceUsd", "N/A")
+        symbol = pair.get("baseToken", {}).get("symbol", "?")
 
-        except Exception as e:
-            logging.warning(f"Ошибка обработки пары {pair.get('baseToken', {}).get('symbol', '?')}: {e}")
+        msg = (
+            f"🚨 Найден токен {symbol}\n"
+            f"💰 Цена: {price} USD\n"
+            f"⏱ Возраст пары: {age_min:.1f} минут\n"
+            f"🌐 Dexscreener: {pair.get('url')}"
+        )
 
-@app.route("/ping", methods=["GET"])
-def ping():
-    return "pong", 200
+        print(msg)
+        send_telegram(msg)
+
+    except Exception as e:
+        print("Ошибка проверки токена:", e)
+
+
+def main():
+    print("✅ Бот запущен, слежение за монетой...")
+    while True:
+        check_token()
+        time.sleep(CHECK_INTERVAL)
+
 
 if __name__ == "__main__":
-    logging.info("🚀 Бот запущен и мониторит рынок Solana")
-    process_pairs()  # запуск один раз при старте
+    main()
