@@ -2,3 +2,4 @@ requests
 python-dotenv
 flask
 python-telegram-bot
+waitress
