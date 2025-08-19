@@ -16,6 +16,12 @@ BOOST_PERCENT = 30        # % роста для сигнала буста
 price_history = {}
 last_status_time = datetime.now(timezone.utc)
 
+# DEX'ы для мониторинга
+DEX_LIST = [
+    "pumpswap", "raydium", "orca", "meteora",
+    "pumpfun", "meteora-dbc", "fluxbeam"
+]
+
 # ======================
 # 📩 Отправка сообщений
 # ======================
@@ -27,32 +33,31 @@ def send_tg(msg: str):
         logging.error(f"Ошибка отправки в Telegram: {e}")
 
 # ======================
-# 📊 Получение монет (пример DexScreener API)
+# 📊 Получение монет с DexScreener
 # ======================
 def fetch_from_dexscreener():
-    try:
-        url = "https://api.dexscreener.com/latest/dex/tokens"
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200:
-            logging.error(f"Ошибка запроса DexScreener: {r.status_code}")
-            return []
+    tokens = []
+    for dex in DEX_LIST:
+        try:
+            url = f"https://api.dexscreener.com/latest/dex/search/?q={dex}"
+            r = requests.get(url, timeout=10)
+            if r.status_code != 200:
+                logging.error(f"Ошибка запроса {dex}: {r.status_code}")
+                continue
 
-        data = r.json()
-        tokens = []
-        for pair in data.get("pairs", []):
-            tokens.append({
-                "symbol": pair.get("baseToken", {}).get("symbol", "N/A"),
-                "address": pair.get("baseToken", {}).get("address", "N/A"),
-                "price": float(pair.get("priceUsd", 0)),
-                "dex": pair.get("dexId", "N/A"),
-                "url": f"https://dexscreener.com/solana/{pair.get('pairAddress', '')}",
-                "phantom": f"https://phantom.app/ul/browse/{pair.get('pairAddress', '')}"
-            })
-        return tokens
-
-    except Exception as e:
-        logging.error(f"DexScreener fetch error: {e}")
-        return []
+            data = r.json()
+            for pair in data.get("pairs", []):
+                tokens.append({
+                    "symbol": pair.get("baseToken", {}).get("symbol", "N/A"),
+                    "address": pair.get("baseToken", {}).get("address", "N/A"),
+                    "price": float(pair.get("priceUsd", 0) or 0),
+                    "dex": pair.get("dexId", "N/A"),
+                    "url": f"https://dexscreener.com/solana/{pair.get('pairAddress', '')}",
+                    "phantom": f"https://phantom.app/ul/browse/{pair.get('pairAddress', '')}"
+                })
+        except Exception as e:
+            logging.error(f"DexScreener fetch error {dex}: {e}")
+    return tokens
 
 # ======================
 # 🚀 Проверка на буст монеты
@@ -90,7 +95,7 @@ def check_boost(token):
 # ======================
 def main():
     global last_status_time
-    send_tg("✅ Бот запущен и отслеживает новые монеты")
+    send_tg("✅ Бот запущен и отслеживает новые монеты со всех DEX'ов")
 
     while True:
         tokens = fetch_from_dexscreener()
