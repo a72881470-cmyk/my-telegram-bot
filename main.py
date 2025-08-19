@@ -1,170 +1,109 @@
-import requests
-import time
+import os
 import logging
-from datetime import datetime, timedelta, timezone
+import requests
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+from telegram import Bot
+from flask import Flask, request
 
-# ======================
-# 🔧 Настройки
-# ======================
-TG_TOKEN = "ТОКЕН_ТЕЛЕГРАМ"
-TG_CHAT_ID = "ID_ТЕЛЕГРАМ"
+# Загружаем .env
+load_dotenv()
 
-STATUS_INTERVAL = 3600       # каждые 1 час бот пишет "на связи"
-BOOST_CHECK_MINUTES = 5      # проверка роста монеты
-BOOST_PERCENT = 5            # 🚀 сигнал если рост >5% за 5 минут
+# Логирование
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
-# Фильтры из твоего файла
-NEW_MAX_AGE_MIN = 180        # не старше 3 часов
-MIN_LIQ_USD = 10000          # минимум $10k ликвидность
-MAX_LIQ_USD = 5000000        # максимум $5m ликвидность
-MAX_FDV_USD = 50000000       # FDV до $50m
-MIN_TXNS_5M = 10             # минимум 10 сделок за 5 минут
-MIN_BUYS_RATIO_5M = 0.45     # минимум 45% покупок
-MIN_PCHANGE_5M_BUY = 1       # минимум рост 1% за 5 минут
+# Конфиг
+NEW_MAX_AGE_MIN = 180
+MIN_LIQ_USD = 10000
+MAX_LIQ_USD = 5000000
+MAX_FDV_USD = 50000000
+MIN_TXNS_5M = 10
+MIN_BUYS_RATIO_5M = 0.45
+MIN_PCHANGE_5M_BUY = 1
+MIN_PCHANGE_5M_ALERT = 5
 
-# ======================
-# 🗂 Хранилище данных
-# ======================
-price_history = {}
-last_status_time = datetime.now(timezone.utc)
+# Telegram
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+bot = Bot(token=TELEGRAM_TOKEN)
 
-# DEX'ы для мониторинга
-DEX_LIST = [
-    "pumpswap", "raydium", "orca", "meteora",
-    "pumpfun", "meteora-dbc", "fluxbeam"
-]
+# Flask (для Heroku/PaaS)
+app = Flask(__name__)
 
-# ======================
-# 📩 Отправка сообщений
-# ======================
-def send_tg(msg: str):
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/pairs/solana"
+
+def fetch_pairs():
     try:
-        requests.post(url, data={
-            "chat_id": TG_CHAT_ID,
-            "text": msg,
-            "parse_mode": "HTML"
-        }, timeout=10)
+        resp = requests.get(DEXSCREENER_API, timeout=10)
+        if resp.status_code == 200:
+            return resp.json().get("pairs", [])
     except Exception as e:
-        logging.error(f"Ошибка отправки в Telegram: {e}")
+        logging.error(f"Ошибка API Dexscreener: {e}")
+    return []
 
-# ======================
-# 📊 Получение монет с DexScreener
-# ======================
-def fetch_from_dexscreener():
-    tokens = []
-    for dex in DEX_LIST:
+def process_pairs():
+    pairs = fetch_pairs()
+    if not pairs:
+        return
+
+    for pair in pairs:
         try:
-            url = f"https://api.dexscreener.com/latest/dex/search/?q={dex}"
-            r = requests.get(url, timeout=10)
+            base_token = pair["baseToken"]["symbol"]
+            liquidity_usd = float(pair.get("liquidity", {}).get("usd", 0))
+            fdv = float(pair.get("fdv", 0))
+            txns5m = int(pair.get("txns", {}).get("m5", {}).get("buys", 0)) + int(pair.get("txns", {}).get("m5", {}).get("sells", 0))
+            buys = int(pair.get("txns", {}).get("m5", {}).get("buys", 0))
+            ratio_buys = buys / txns5m if txns5m > 0 else 0
+            price_change_5m = float(pair.get("priceChange", {}).get("m5", 0))
 
-            if r.status_code == 404:
-                logging.warning(f"❌ Нет данных для {dex} (404)")
+            # ---------------- ФИКС возраста ----------------
+            created_at = pair.get("pairCreatedAt")
+            if isinstance(created_at, int):  # timestamp (ms)
+                created_dt = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
+            elif isinstance(created_at, str):  # ISO
+                created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            else:
+                created_dt = datetime.now(timezone.utc)
+            age_min = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60
+            # ------------------------------------------------
+
+            # Фильтрация
+            if not (liquidity_usd >= MIN_LIQ_USD and liquidity_usd <= MAX_LIQ_USD):
                 continue
-            if r.status_code != 200:
-                logging.error(f"Ошибка запроса {dex}: {r.status_code}")
+            if fdv > MAX_FDV_USD:
+                continue
+            if txns5m < MIN_TXNS_5M:
+                continue
+            if ratio_buys < MIN_BUYS_RATIO_5M:
+                continue
+            if age_min > NEW_MAX_AGE_MIN:
                 continue
 
-            data = r.json()
-            for pair in data.get("pairs", []):
-                try:
-                    token = {
-                        "symbol": pair.get("baseToken", {}).get("symbol", "N/A"),
-                        "address": pair.get("baseToken", {}).get("address", "N/A"),
-                        "price": float(pair.get("priceUsd", 0) or 0),
-                        "dex": pair.get("dexId", dex),
-                        "url": f"https://dexscreener.com/solana/{pair.get('pairAddress', '')}",
-                        "phantom": f"https://phantom.app/ul/browse/{pair.get('pairAddress', '')}",
-                        "liquidity": pair.get("liquidity", {}).get("usd", 0),
-                        "fdv": pair.get("fdv", 0),
-                        "txns5m": pair.get("txns", {}).get("m5", {}).get("buys", 0)
-                                + pair.get("txns", {}).get("m5", {}).get("sells", 0),
-                        "buys_ratio": (
-                            pair.get("txns", {}).get("m5", {}).get("buys", 0) /
-                            max(1, pair.get("txns", {}).get("m5", {}).get("buys", 0)
-                                + pair.get("txns", {}).get("m5", {}).get("sells", 0))
-                        ),
-                        "age_min": (datetime.now(timezone.utc) -
-                                    datetime.fromisoformat(pair.get("pairCreatedAt", datetime.now().isoformat())
-                                                           .replace("Z", "+00:00"))).total_seconds() / 60
-                    }
-
-                    # фильтры
-                    if not (MIN_LIQ_USD <= token["liquidity"] <= MAX_LIQ_USD):
-                        continue
-                    if token["fdv"] > MAX_FDV_USD:
-                        continue
-                    if token["txns5m"] < MIN_TXNS_5M:
-                        continue
-                    if token["buys_ratio"] < MIN_BUYS_RATIO_5M:
-                        continue
-                    if token["age_min"] > NEW_MAX_AGE_MIN:
-                        continue
-
-                    tokens.append(token)
-
-                except Exception as e:
-                    logging.warning(f"Ошибка обработки пары {dex}: {e}")
+            # Сигнал
+            if price_change_5m >= MIN_PCHANGE_5M_ALERT:
+                message = (
+                    f"🚀 Новый сигнал!\n\n"
+                    f"Монета: {base_token}\n"
+                    f"Цена изм. 5м: {price_change_5m:.2f}%\n"
+                    f"Ликвидность: ${liquidity_usd:,.0f}\n"
+                    f"FDV: ${fdv:,.0f}\n"
+                    f"Сделки (5м): {txns5m}\n"
+                    f"Buy Ratio: {ratio_buys:.2%}\n"
+                    f"Возраст: {age_min:.1f} мин\n"
+                    f"🔗 {pair.get('url')}"
+                )
+                bot.send_message(chat_id=CHAT_ID, text=message)
 
         except Exception as e:
-            logging.error(f"DexScreener fetch error {dex}: {e}")
-    return tokens
+            logging.warning(f"Ошибка обработки пары {pair.get('baseToken', {}).get('symbol', '?')}: {e}")
 
-# ======================
-# 🚀 Проверка на буст монеты
-# ======================
-def check_boost(token):
-    addr = token["address"]
-    now = datetime.now(timezone.utc)
-    price = token["price"]
-
-    if not price or price <= 0:
-        return None
-
-    if addr in price_history:
-        old_price, ts = price_history[addr]
-        if now - ts >= timedelta(minutes=BOOST_CHECK_MINUTES):
-            change = ((price - old_price) / old_price) * 100 if old_price > 0 else 0
-            if change >= BOOST_PERCENT:
-                return (
-                    f"🚀 <b>СИГНАЛ: БУСТ МОНЕТЫ!</b>\n"
-                    f"<b>{token['symbol']}</b> ({token['address']})\n"
-                    f"DEX: {token['dex']}\n"
-                    f"Цена: ${price:.6f} (+{change:.2f}% за {BOOST_CHECK_MINUTES} мин)\n"
-                    f"<a href='{token['url']}'>DexScreener</a>\n"
-                    f"<a href='{token['phantom']}'>Phantom</a>"
-                )
-            else:
-                price_history[addr] = (price, now)
-    else:
-        price_history[addr] = (price, now)
-
-    return None
-
-# ======================
-# 🔄 Основной цикл
-# ======================
-def main():
-    global last_status_time
-    send_tg("✅ Бот запущен и отслеживает монеты со всех DEX'ов")
-
-    while True:
-        tokens = fetch_from_dexscreener()
-
-        now = datetime.now(timezone.utc)
-        if (now - last_status_time).total_seconds() >= STATUS_INTERVAL:
-            send_tg("⏰ Бот на связи")
-            last_status_time = now
-
-        for token in tokens:
-            boost_msg = check_boost(token)
-            if boost_msg:
-                send_tg(boost_msg)
-
-        time.sleep(30)
-
+@app.route("/ping", methods=["GET"])
+def ping():
+    return "pong", 200
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    logging.info("Starting Container")
-    main()
+    logging.info("🚀 Бот запущен и мониторит рынок Solana")
+    process_pairs()  # запуск один раз при старте
