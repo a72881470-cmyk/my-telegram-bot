@@ -1,7 +1,6 @@
 import requests
 import time
 from datetime import datetime, timezone
-import os
 
 # ------------------- НАСТРОЙКИ -------------------
 BOT_TOKEN = "ТВОЙ_ТОКЕН_БОТА"
@@ -18,9 +17,11 @@ def send_telegram(msg: str):
     """Отправка сообщения в Telegram"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+        r = requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=10)
+        if r.status_code != 200:
+            print(f"⚠ Ошибка отправки в Telegram: {r.text}")
     except Exception as e:
-        print("Ошибка отправки в Telegram:", e)
+        print("⚠ Исключение при отправке в Telegram:", e)
 
 
 def check_token():
@@ -28,10 +29,16 @@ def check_token():
     try:
         url = API_URL + WATCH_TOKEN
         r = requests.get(url, timeout=10)
+
+        if r.status_code != 200:
+            print(f"⚠ Ошибка API Dexscreener: {r.status_code}")
+            return
+
         data = r.json()
 
-        if "pairs" not in data or len(data["pairs"]) == 0:
-            print("⚠ Монета не найдена")
+        # Проверка структуры ответа
+        if not data or "pairs" not in data or not data["pairs"]:
+            print("⚠ Монета не найдена или API вернул пустой ответ")
             return
 
         pair = data["pairs"][0]
@@ -42,7 +49,7 @@ def check_token():
 
         if isinstance(created_at, int):  # timestamp в ms
             created_dt = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
-        elif isinstance(created_at, str):  # иногда ISO
+        elif isinstance(created_at, str):  # ISO8601
             try:
                 created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
             except Exception:
@@ -54,21 +61,22 @@ def check_token():
         # ------------------------------
 
         # Данные о цене
-        price = pair.get("priceUsd", "N/A")
+        price = pair.get("priceUsd") or "N/A"
         symbol = pair.get("baseToken", {}).get("symbol", "?")
+        url_dex = pair.get("url", "Нет ссылки")
 
         msg = (
             f"🚨 Найден токен {symbol}\n"
             f"💰 Цена: {price} USD\n"
             f"⏱ Возраст пары: {age_min:.1f} минут\n"
-            f"🌐 Dexscreener: {pair.get('url')}"
+            f"🌐 Dexscreener: {url_dex}"
         )
 
         print(msg)
         send_telegram(msg)
 
     except Exception as e:
-        print("Ошибка проверки токена:", e)
+        print("⚠ Ошибка проверки токена:", e)
 
 
 def main():
