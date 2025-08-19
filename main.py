@@ -78,6 +78,7 @@ def main():
     send_telegram_message("🚀 Бот запущен и слушает новые токены")
 
     last_heartbeat = datetime.now()
+    seen_tokens = set()  # чтобы не спамить одинаковыми токенами
 
     while True:
         all_tokens = []
@@ -87,8 +88,12 @@ def main():
         if all_tokens:
             logging.info(f"Найдено {len(all_tokens)} токенов")
             for t in all_tokens[:5]:
-                msg = f"[{t['dex']}] {t['symbol']} ({t['address']})\n{t['url']}"
-                logging.info(msg)
+                token_id = f"{t['dex']}:{t['address']}"
+                if token_id not in seen_tokens:  # только новые токены
+                    seen_tokens.add(token_id)
+                    msg = f"[{t['dex']}] {t['symbol']} ({t['address']})\n{t['url']}"
+                    logging.info(msg)
+                    send_telegram_message(msg)
         else:
             logging.info("Новых токенов не найдено")
 
