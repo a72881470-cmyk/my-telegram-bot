@@ -1,5 +1,4 @@
-requests
-python-dotenv
-flask
-python-telegram-bot
-waitress
+python-telegram-bot==21.4
+websockets==12.0
+requests==2.32
+python-dotenv==1.0
