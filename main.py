@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 # 🔑 Токен и чат
 TELEGRAM_TOKEN = "ТОКЕН_ТВОЕГО_БОТА"
 CHAT_ID = "ТВОЙ_CHAT_ID"
-API_KEY = "sadasd234234234234"  # твой ключ с Birdeye
+API_KEY = "9aad437cea2b440e8ebf437a60a3d02e"  # ✅ твой ключ с Birdeye
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 sent_tokens = set()
@@ -17,7 +17,7 @@ def fetch_new_tokens():
     headers = {
         "accept": "application/json",
         "x-chain": "solana",
-        "x-api-key": API_KEY
+        "X-API-KEY": API_KEY
     }
     try:
         resp = requests.get(url, headers=headers, timeout=10)
