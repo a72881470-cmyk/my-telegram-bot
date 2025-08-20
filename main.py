@@ -1,36 +1,19 @@
 import requests
 import telebot
 import time
-import json
 from datetime import datetime, timedelta
 
-# 🔑 Настройки
+# 🔑 Токен и чат
 TELEGRAM_TOKEN = "ТОКЕН_ТВОЕГО_БОТА"
 CHAT_ID = "ТВОЙ_CHAT_ID"
-API_KEY = "sadasd234234234234"   # Birdeye API ключ
+API_KEY = "sadasd234234234234"  # твой ключ с Birdeye
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-# 📂 Храним отправленные токены и цены
-SENT_FILE = "sent_tokens.json"
-PRICES_FILE = "prices.json"
-
-try:
-    with open(SENT_FILE, "r") as f:
-        sent_tokens = set(json.load(f))
-except:
-    sent_tokens = set()
-
-try:
-    with open(PRICES_FILE, "r") as f:
-        token_prices = json.load(f)
-except:
-    token_prices = {}  # {address: {"price": float, "time": timestamp}}
-
+sent_tokens = set()
 
 # 📡 Получаем новые токены Solana
 def fetch_new_tokens():
-    url = "https://public-api.birdeye.so/defi/new_pairs?limit=50&offset=0"
+    url = "https://public-api.birdeye.so/defi/tokenlist?sort_by=created_at&sort_type=desc&offset=0&limit=50"
     headers = {
         "accept": "application/json",
         "x-chain": "solana",
@@ -39,18 +22,18 @@ def fetch_new_tokens():
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code != 200:
-            print(f"❌ Ошибка API: статус {resp.status_code}")
+            print(f"❌ Ошибка API: статус {resp.status_code}, ответ: {resp.text}")
             return []
 
         data = resp.json()
-        tokens = data.get("data", [])
+        tokens = data.get("data", {}).get("tokens", [])
 
         new_tokens = []
         now = datetime.utcnow()
         max_age = timedelta(days=2)
 
         for token in tokens:
-            created_at = token.get("createdTime")
+            created_at = token.get("created_at")
             if not created_at:
                 continue
 
@@ -60,119 +43,88 @@ def fetch_new_tokens():
                 continue
 
             if now - created_at <= max_age:
-                vol = float(token.get("volume24hUSD", 0) or 0)
-                liq = float(token.get("liquidity", 0) or 0)
+                # 🔹 Объём
+                vol = token.get("volume_usd", 0)
+                try:
+                    vol = float(vol)
+                except Exception:
+                    vol = 0
 
-                if vol > 1000 and liq > 2000:
+                # 🔹 Ликвидность
+                liq = token.get("liquidity_usd", 0)
+                try:
+                    liq = float(liq)
+                except Exception:
+                    liq = 0
+
+                # 📌 Фильтр: объём > 5000$ и ликвидность > 10k$
+                if vol > 5000 and liq > 10000:
                     new_tokens.append(token)
 
-        print(f"✅ Найдено {len(new_tokens)} новых токенов")
+        print(f"✅ Найдено {len(new_tokens)} новых токенов (2 дня, vol>5k$, liq>10k$)")
         return new_tokens[:5]
 
     except Exception as e:
         print("Ошибка API:", e)
         return []
 
-
-# 📡 Получаем актуальную цену токена
-def fetch_token_price(address):
-    url = f"https://public-api.birdeye.so/defi/price?address={address}"
-    headers = {
-        "accept": "application/json",
-        "x-chain": "solana",
-        "x-api-key": API_KEY
-    }
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        data = resp.json()
-        return float(data.get("data", {}).get("value", 0))
-    except:
-        return 0
-
-
 # 📩 Отправляем токен в Telegram
-def send_token_alert(token, alert_type="new"):
+def send_token_alert(token):
     try:
-        name = token.get("baseToken", {}).get("name", "N/A")
-        symbol = token.get("baseToken", {}).get("symbol", "N/A")
-        address = token.get("baseToken", {}).get("address", "N/A")
+        name = token.get("name", "N/A")
+        symbol = token.get("symbol", "N/A")
+        address = token.get("address", "N/A")
 
-        price = fetch_token_price(address)
-        volume = round(float(token.get("volume24hUSD", 0) or 0), 2)
-        liquidity = round(float(token.get("liquidity", 0) or 0), 2)
+        price = token.get("price", "N/A")
+        try:
+            price = round(float(price), 6)
+        except Exception:
+            price = "N/A"
 
-        if alert_type == "new":
-            message = (
-                f"🟢 Новый токен!\n\n"
-                f"📛 Название: {name}\n"
-                f"🔹 Символ: {symbol}\n"
-                f"💲 Цена: {price}\n"
-                f"📊 Объём 24ч: {volume}$\n"
-                f"💧 Ликвидность: {liquidity}$\n"
-                f"🌐 DexScreener: https://dexscreener.com/solana/{address}\n"
-                f"👛 Phantom: https://phantom.app/ul/browse/{address}"
-            )
-        else:
-            message = (
-                f"🚀 РОСТ ТОКЕНА!\n\n"
-                f"📛 {name} ({symbol})\n"
-                f"📈 Цена выросла на {alert_type}% за 5 минут!\n"
-                f"💲 Текущая цена: {price}\n"
-                f"🌐 DexScreener: https://dexscreener.com/solana/{address}"
-            )
+        volume = token.get("volume_usd", "N/A")
+        try:
+            volume = round(float(volume), 2)
+        except Exception:
+            volume = "N/A"
+
+        liquidity = token.get("liquidity_usd", "N/A")
+        try:
+            liquidity = round(float(liquidity), 2)
+        except Exception:
+            liquidity = "N/A"
+
+        message = (
+            f"🟢 Новый токен найден!\n\n"
+            f"📛 Название: {name}\n"
+            f"🔹 Символ: {symbol}\n"
+            f"💲 Цена: {price}\n"
+            f"📊 Объём 24ч: {volume}$\n"
+            f"💧 Ликвидность: {liquidity}$\n"
+            f"🌐 DexScreener: https://dexscreener.com/solana/{address}\n"
+            f"👛 Phantom: https://phantom.app/ul/browse/{address}"
+        )
 
         bot.send_message(CHAT_ID, message)
-        print(f"✅ Отправлено сообщение про {name} ({symbol})")
+        print(f"✅ Отправлено: {name} ({symbol})")
 
     except Exception as e:
         print("Ошибка отправки в Telegram:", e)
 
-
 # 🚀 Основной цикл
 def main():
-    global sent_tokens, token_prices
-
     print("🚀 Бот запущен, ловлю новые токены Solana...")
-
     while True:
         tokens = fetch_new_tokens()
-        now = time.time()
-
         for token in tokens:
-            address = token.get("baseToken", {}).get("address")
+            address = token.get("address")
             if not address:
                 continue
-
-            # 📌 Новый токен
-            if address not in sent_tokens:
-                send_token_alert(token, "new")
-                sent_tokens.add(address)
-                price = fetch_token_price(address)
-                token_prices[address] = {"price": price, "time": now}
-
-                with open(SENT_FILE, "w") as f:
-                    json.dump(list(sent_tokens), f)
-                with open(PRICES_FILE, "w") as f:
-                    json.dump(token_prices, f)
-
-            else:
-                # 📈 Проверяем рост цены
-                old_data = token_prices.get(address)
-                if old_data and now - old_data["time"] >= 300:  # 5 минут
-                    old_price = old_data["price"]
-                    new_price = fetch_token_price(address)
-
-                    if old_price > 0:
-                        change = ((new_price - old_price) / old_price) * 100
-                        if change >= 20:
-                            send_token_alert(token, round(change, 2))
-
-                    token_prices[address] = {"price": new_price, "time": now}
-                    with open(PRICES_FILE, "w") as f:
-                        json.dump(token_prices, f)
-
+            if address in sent_tokens:
+                print(f"⚠ {token.get('symbol', '???')} уже отправляли, пропуск...")
+                continue
+            send_token_alert(token)
+            sent_tokens.add(address)
         time.sleep(60)
-
 
 if __name__ == "__main__":
     main()
