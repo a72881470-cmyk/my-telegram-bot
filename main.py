@@ -9,35 +9,24 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-SEND_ALL_NEW_TOKENS = os.getenv("SEND_ALL_NEW_TOKENS", "false").lower() == "true"
 
 # === Фильтры ===
-NEW_MAX_AGE_MIN = int(os.getenv("NEW_MAX_AGE_MIN", 180))
+NEW_MAX_AGE_MIN = int(os.getenv("NEW_MAX_AGE_MIN", 60))  # только 1 час
 MIN_LIQ_USD = int(os.getenv("MIN_LIQ_USD", 10000))
 MAX_LIQ_USD = int(os.getenv("MAX_LIQ_USD", 5000000))
 MAX_FDV_USD = int(os.getenv("MAX_FDV_USD", 50000000))
-MIN_TXNS_5M = int(os.getenv("MIN_TXNS_5M", 10))
-MIN_BUYS_RATIO_5M = float(os.getenv("MIN_BUYS_RATIO_5M", 0.45))
-MIN_PCHANGE_5M_BUY = float(os.getenv("MIN_PCHANGE_5M_BUY", 1))
-MIN_PCHANGE_5M_ALERT = float(os.getenv("MIN_PCHANGE_5M_ALERT", 5))
-
-# === Сигналы ===
-PUMP_ALERT_PCT = float(os.getenv("PUMP_ALERT_PCT", 100))
-DROP_ALERT_PCT = float(os.getenv("DROP_ALERT_PCT", 100))
-TRAIL_START_PCT = float(os.getenv("TRAIL_START_PCT", 20))
-TRAIL_GAP_PCT = float(os.getenv("TRAIL_GAP_PCT", 15))
-MAX_DRAWDOWN_PCT = float(os.getenv("MAX_DRAWDOWN_PCT", 30))
-LIQ_DROP_RUG_PCT = float(os.getenv("LIQ_DROP_RUG_PCT", 50))
 
 # === DexScreener API ===
-DEX_API = "https://api.dexscreener.com/latest/dex/tokens/"
+DEX_API = "https://api.dexscreener.com/latest/dex/search/?q=solana"
+
+# === Список уже отправленных токенов ===
+sent_tokens = set()
 
 
 # Telegram API
 def send_telegram(msg: str, buttons=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    # Универсальная обработка chat_id
     chat_id = CHAT_ID.strip() if CHAT_ID else None
     if chat_id and chat_id.lstrip("-").isdigit():
         chat_id = int(chat_id)
@@ -67,11 +56,11 @@ def phantom_button(token_address: str):
     }
 
 
-# Проверка токенов в сети Solana
+# Проверка токенов
 def check_new_tokens():
-    url = "https://api.dexscreener.com/latest/dex/search/?q=solana"
+    global sent_tokens
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(DEX_API, timeout=15)
         if r.status_code != 200:
             print(f"⚠ Ошибка DexScreener: {r.status_code}")
             return
@@ -91,23 +80,24 @@ def check_new_tokens():
             created_at = pair.get("pairCreatedAt")
             url_dex = pair.get("url", "")
 
-            # Возраст токена
+            # Проверка возраста
             if isinstance(created_at, int):
                 created_dt = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
+                age_min = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60
             else:
-                created_dt = datetime.now(timezone.utc)
-            age_min = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60
+                age_min = 9999  # если нет даты, считаем старым
 
-            # Если включен режим "все токены", фильтры пропускаем
-            if not SEND_ALL_NEW_TOKENS:
-                if age_min > NEW_MAX_AGE_MIN:
-                    continue
-                if not (MIN_LIQ_USD <= liq <= MAX_LIQ_USD):
-                    continue
-                if fdv > MAX_FDV_USD:
-                    continue
+            if age_min > NEW_MAX_AGE_MIN:
+                continue
 
-            # Сигнал
+            # Пропуск если уже присылали
+            if address in sent_tokens:
+                continue
+
+            # Добавляем в список отправленных
+            sent_tokens.add(address)
+
+            # Формируем сообщение
             msg = (
                 f"🚀 Новый токен Solana!\n"
                 f"🔹 *{symbol}*\n"
@@ -117,7 +107,8 @@ def check_new_tokens():
                 f"⏱ Возраст: {age_min:.1f} мин\n"
                 f"🌐 [DexScreener]({url_dex})"
             )
-            print(msg)
+
+            print(f"✅ Отправлено: {symbol} ({address})")
             send_telegram(msg, buttons=phantom_button(address))
 
     except Exception as e:
