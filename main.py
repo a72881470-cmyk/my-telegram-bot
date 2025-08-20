@@ -15,7 +15,7 @@ sent_tokens = set()
 
 # Функция получения новых токенов с DexScreener
 def fetch_new_tokens():
-    url = "https://api.dexscreener.com/latest/dex/search?q=solana"
+    url = "https://api.dexscreener.com/latest/dex/chains/solana"
     try:
         resp = requests.get(url, timeout=10)
 
@@ -25,31 +25,34 @@ def fetch_new_tokens():
 
         data = resp.json()
 
-        # Сохраняем ответ для анализа
-        with open("api_debug.json", "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-        if not data or "pairs" not in data or not data["pairs"]:
+        if not data or "pairs" not in data:
             print("⚠ API вернуло пустой ответ или нет поля 'pairs'")
             return []
 
+        pairs = data["pairs"]
+        print(f"🔍 Всего пар на Solana: {len(pairs)}")
+
+        # Логируем первые 3 токена для проверки
+        for p in pairs[:3]:
+            print("👉", p.get("baseToken", {}).get("symbol"), "-", p.get("baseToken", {}).get("name"))
+
+        # --- Фильтр по возрасту и объему ---
         new_pairs = []
         now = datetime.utcnow()
-        max_age = timedelta(days=2)  # фильтр — младше 2 дней
+        max_age = timedelta(days=2)
 
-        for pair in data["pairs"]:
-            if pair.get("chainId") != "solana":
-                continue
-
+        for pair in pairs:
             created_ts = pair.get("pairCreatedAt")
             if created_ts:
                 created_at = datetime.utcfromtimestamp(created_ts / 1000)
-                age = now - created_at
-                if age <= max_age:
-                    new_pairs.append(pair)
+                if now - created_at <= max_age:
+                    volume = pair.get("volume", {}).get("h24", 0)
+                    if volume and volume > 5000:  # фильтр по объему
+                        new_pairs.append(pair)
 
-        print(f"✅ Найдено {len(new_pairs)} новых токенов (младше 2 дней)")
-        return new_pairs[:5]  # берём первые 5
+        print(f"✅ Найдено {len(new_pairs)} новых токенов (младше 2 дней и volume > 5k$)")
+        return new_pairs[:5]
+
     except Exception as e:
         print("Ошибка API:", e)
         return []
@@ -61,19 +64,14 @@ def send_token_alert(token):
         symbol = token.get("baseToken", {}).get("symbol", "N/A")
         price = token.get("priceUsd", "N/A")
         url = token.get("url", "https://dexscreener.com/")
-        created_ts = token.get("pairCreatedAt")
-
-        created_at_str = "N/A"
-        if created_ts:
-            created_at = datetime.utcfromtimestamp(created_ts / 1000)
-            created_at_str = created_at.strftime("%Y-%m-%d %H:%M:%S")
+        volume = token.get("volume", {}).get("h24", "N/A")
 
         message = (
             f"🟢 Новый токен найден!\n\n"
             f"📛 Название: {name}\n"
             f"🔹 Символ: {symbol}\n"
             f"💲 Цена: {price}\n"
-            f"🕒 Дата создания: {created_at_str} UTC\n"
+            f"📊 Объем 24ч: {volume}$\n"
             f"🌐 DexScreener: {url}\n"
             f"👛 Phantom: https://phantom.app/"
         )
