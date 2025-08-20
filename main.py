@@ -27,6 +27,7 @@ def send_alert(text: str):
     if now - last_alert_time >= ALERT_COOLDOWN:
         bot.send_message(CHAT_ID, text)
         last_alert_time = now
+        time.sleep(1)  # задержка для анти-спама Telegram
     else:
         print("⏳ Сообщение пропущено (анти-спам)")
 
@@ -36,13 +37,13 @@ def worker_status():
     Отправляет сообщение "Я работаю" каждые 2 часа
     """
     while True:
-        bot.send_message(CHAT_ID, "✅ Я работаю, слежу за рынком!")
+        bot.send_message(CHAT_ID, "✅ Я работаю, слежу за рынком! 💰")
         time.sleep(7200)  # 2 часа
 
 
 def main():
     # При запуске
-    bot.send_message(CHAT_ID, "🚀 Погнали фармить 💰")
+    bot.send_message(CHAT_ID, "🚀 Погнали фармить деньги 💸")
 
     # Запуск отдельного потока для сообщений "Я работаю"
     threading.Thread(target=worker_status, daemon=True).start()
