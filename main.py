@@ -2,109 +2,101 @@ import os
 import time
 import requests
 import telebot
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from datetime import datetime, timezone, timedelta
 
-# Загружаем переменные окружения
+# Загружаем .env
 load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY")
 
-# Конфиги
-API_KEY = os.getenv("API_KEY")  # твой API для Solana
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # токен Telegram бота
-CHAT_ID = os.getenv("CHAT_ID")  # твой chat_id в Telegram
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-bot = telebot.TeleBot(BOT_TOKEN)
+API_URL = "https://public-api.birdeye.so/public/tokenlist?sort=createdAt&chain=solana"
+HEADERS = {"x-api-key": BIRDEYE_API_KEY}
 
-# Хранилище токенов
-tracked_tokens = {}
+# Запоминаем токены, чтобы не слать повторно
+seen_tokens = {}
 
-# Отправка сообщений
-def send_message(text: str):
-    try:
-        bot.send_message(CHAT_ID, text, parse_mode="HTML", disable_web_page_preview=True)
-    except Exception as e:
-        print(f"Ошибка отправки в Telegram: {e}")
-
-# Получение новых токенов
 def get_new_tokens():
-    url = "https://api.dexscreener.com/latest/dex/tokens"
-    headers = {"Authorization": API_KEY}
-    response = requests.get(url, headers=headers)
-
-    if response.status_code != 200:
-        print(f"Ошибка API: {response.status_code}, {response.text}")
+    """Получаем список новых токенов с Birdeye"""
+    try:
+        response = requests.get(API_URL, headers=HEADERS)
+        if response.status_code == 200:
+            return response.json().get("data", {}).get("tokens", [])
+        else:
+            print("Ошибка API:", response.status_code, response.text)
+            return []
+    except Exception as e:
+        print("Ошибка при запросе:", e)
         return []
 
-    tokens = response.json().get("pairs", [])
-    fresh_tokens = []
-    now = datetime.utcnow()
+def notify_telegram(text):
+    """Отправка уведомления в Telegram"""
+    try:
+        bot.send_message(CHAT_ID, text, parse_mode="HTML")
+    except Exception as e:
+        print("Ошибка при отправке в Telegram:", e)
+
+def check_tokens():
+    tokens = get_new_tokens()
+    now = datetime.now(timezone.utc)
 
     for token in tokens:
-        created_at = datetime.utcfromtimestamp(token["pairCreatedAt"] / 1000)
-        if now - created_at < timedelta(hours=3):  # не старше 3 часов
-            fresh_tokens.append(token)
-    return fresh_tokens
-
-# Проверка роста токена
-def check_growth(token):
-    address = token["baseToken"]["address"]
-    price_change = token.get("priceChange", {}).get("h1", 0)
-
-    if address not in tracked_tokens:
-        tracked_tokens[address] = {
-            "symbol": token["baseToken"]["symbol"],
-            "price": token["priceUsd"],
-            "price_change": price_change
-        }
-        return
-
-    if price_change >= 30:
-        msg = (
-            f"🚀 <b>Рост токена!</b>\n\n"
-            f"💎 Токен: <b>{token['baseToken']['symbol']}</b>\n"
-            f"💰 Цена: ${token['priceUsd']}\n"
-            f"📈 Рост: {price_change}%\n\n"
-            f"🔗 DexScreener: https://dexscreener.com/solana/{address}\n"
-            f"👛 Phantom: https://phantom.app/asset/{address}"
-        )
-        send_message(msg)
-
-# Основной цикл
-def run_bot():
-    last_alive = time.time()
-
-    send_message("✅ Бот запущен, ловлю новые токены Solana...")
-
-    while True:
         try:
-            tokens = get_new_tokens()
-            for token in tokens:
-                address = token["baseToken"]["address"]
-                if address not in tracked_tokens:
-                    msg = (
-                        f"🪙 <b>Найден новый токен!</b>\n\n"
-                        f"💎 Токен: <b>{token['baseToken']['symbol']}</b>\n"
-                        f"💰 Цена: ${token['priceUsd']}\n"
-                        f"⏰ Создан: {datetime.utcfromtimestamp(token['pairCreatedAt']/1000)}\n\n"
-                        f"🔗 DexScreener: https://dexscreener.com/solana/{address}\n"
-                        f"👛 Phantom: https://phantom.app/asset/{address}"
-                    )
-                    send_message(msg)
+            name = token.get("name")
+            symbol = token.get("symbol")
+            address = token.get("address")
+            price = token.get("priceUsd", 0)
+            created_at = datetime.fromtimestamp(token.get("createdAt") / 1000, tz=timezone.utc)
 
-                # Проверяем рост
-                check_growth(token)
+            # Только токены младше 3 часов
+            if (now - created_at) > timedelta(hours=3):
+                continue
 
-            # Сообщение "жив" каждые 2 часа
-            if time.time() - last_alive > 7200:
-                send_message("🤖 Бот жив и работает!")
-                last_alive = time.time()
+            if address not in seen_tokens:
+                seen_tokens[address] = price
 
-            time.sleep(60)  # проверяем раз в минуту
+                msg = (
+                    f"🆕 Новый токен на Solana!\n\n"
+                    f"💎 <b>{name} ({symbol})</b>\n"
+                    f"💰 Цена: ${price:.8f}\n"
+                    f"📈 Рост: 0% (новый)\n"
+                    f"🔗 <a href='https://birdeye.so/token/{address}?chain=solana'>Мониторинг</a>\n"
+                    f"👛 <a href='https://phantom.app/ul/browse/{address}'>Phantom</a>"
+                )
+                notify_telegram(msg)
 
+            else:
+                old_price = seen_tokens[address]
+                if old_price > 0:
+                    growth = ((price - old_price) / old_price) * 100
+                    if growth >= 30:
+                        msg = (
+                            f"🚀 Токен <b>{name} ({symbol})</b> вырос на {growth:.2f}%!\n"
+                            f"💰 Цена: ${price:.8f}\n"
+                            f"🔗 <a href='https://birdeye.so/token/{address}?chain=solana'>Мониторинг</a>"
+                        )
+                        notify_telegram(msg)
+
+                # Обновляем цену
+                seen_tokens[address] = price
         except Exception as e:
-            print(f"Ошибка: {e}")
-            time.sleep(10)
+            print("Ошибка при обработке токена:", e)
 
+def heartbeat():
+    notify_telegram("✅ Бот жив 👋")
 
 if __name__ == "__main__":
-    run_bot()
+    last_heartbeat = time.time()
+
+    while True:
+        check_tokens()
+
+        # Каждые 2 часа напоминаем, что бот жив
+        if time.time() - last_heartbeat > 7200:
+            heartbeat()
+            last_heartbeat = time.time()
+
+        time.sleep(60)  # проверяем раз в минуту
