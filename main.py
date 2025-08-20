@@ -15,7 +15,7 @@ sent_tokens = set()
 
 # Функция получения новых токенов с DexScreener
 def fetch_new_tokens():
-    url = "https://api.dexscreener.com/latest/dex/pairs/solana"
+    url = "https://api.dexscreener.com/latest/dex/search?q=solana"
     try:
         resp = requests.get(url, timeout=10)
 
@@ -35,9 +35,12 @@ def fetch_new_tokens():
 
         new_pairs = []
         now = datetime.utcnow()
-        max_age = timedelta(days=2)  # только токены младше 2 дней
+        max_age = timedelta(days=2)  # фильтр — младше 2 дней
 
         for pair in data["pairs"]:
+            if pair.get("chainId") != "solana":
+                continue
+
             created_ts = pair.get("pairCreatedAt")
             if created_ts:
                 created_at = datetime.utcfromtimestamp(created_ts / 1000)
@@ -46,7 +49,7 @@ def fetch_new_tokens():
                     new_pairs.append(pair)
 
         print(f"✅ Найдено {len(new_pairs)} новых токенов (младше 2 дней)")
-        return new_pairs[:5]  # берём только первые 5
+        return new_pairs[:5]  # берём первые 5
     except Exception as e:
         print("Ошибка API:", e)
         return []
