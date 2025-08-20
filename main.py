@@ -1,121 +1,110 @@
-import requests
+import os
 import time
-import logging
-import json
+import requests
+import telebot
 from datetime import datetime, timedelta
-import telegram
+from dotenv import load_dotenv
 
-# 🔑 Настройки
-API_KEY = "9aad437cea2b440e8ebf437a60a3d02e"
-BOT_TOKEN = "ТВОЙ_TELEGRAM_BOT_TOKEN"
-CHAT_ID = "ТВОЙ_CHAT_ID"
+# Загружаем переменные окружения
+load_dotenv()
 
-# Telegram бот
-bot = telegram.Bot(token=BOT_TOKEN)
+# Конфиги
+API_KEY = os.getenv("API_KEY")  # твой API для Solana
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # токен Telegram бота
+CHAT_ID = os.getenv("CHAT_ID")  # твой chat_id в Telegram
 
-# Логирование
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# Хранилище обработанных токенов
-SEEN_TOKENS_FILE = "seen_tokens.json"
-try:
-    with open(SEEN_TOKENS_FILE, "r") as f:
-        seen_tokens = set(json.load(f))
-except:
-    seen_tokens = set()
+# Хранилище токенов
+tracked_tokens = {}
 
-def save_seen_tokens():
-    with open(SEEN_TOKENS_FILE, "w") as f:
-        json.dump(list(seen_tokens), f)
+# Отправка сообщений
+def send_message(text: str):
+    try:
+        bot.send_message(CHAT_ID, text, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        print(f"Ошибка отправки в Telegram: {e}")
 
-# Проверка API ключа
-def check_api_key():
-    url = "https://public-api.birdeye.so/defi/tokenlist?offset=0&limit=1"
-    headers = {"accept": "application/json", "x-chain": "solana", "X-API-KEY": API_KEY}
-    r = requests.get(url, headers=headers)
-    return r.status_code == 200
+# Получение новых токенов
+def get_new_tokens():
+    url = "https://api.dexscreener.com/latest/dex/tokens"
+    headers = {"Authorization": API_KEY}
+    response = requests.get(url, headers=headers)
 
-# Получить список токенов
-def fetch_tokens():
-    url = "https://public-api.birdeye.so/defi/tokenlist?offset=0&limit=20"
-    headers = {"accept": "application/json", "x-chain": "solana", "X-API-KEY": API_KEY}
-    r = requests.get(url, headers=headers)
-    if r.status_code == 200:
-        return r.json().get("data", {}).get("tokens", [])
-    return []
+    if response.status_code != 200:
+        print(f"Ошибка API: {response.status_code}, {response.text}")
+        return []
 
-# Получить инфо о токене
-def fetch_token_info(address):
-    url = f"https://public-api.birdeye.so/defi/price?address={address}"
-    headers = {"accept": "application/json", "x-chain": "solana", "X-API-KEY": API_KEY}
-    r = requests.get(url, headers=headers)
-    if r.status_code == 200:
-        return r.json().get("data", {})
-    return {}
+    tokens = response.json().get("pairs", [])
+    fresh_tokens = []
+    now = datetime.utcnow()
 
-# Основная логика
+    for token in tokens:
+        created_at = datetime.utcfromtimestamp(token["pairCreatedAt"] / 1000)
+        if now - created_at < timedelta(hours=3):  # не старше 3 часов
+            fresh_tokens.append(token)
+    return fresh_tokens
+
+# Проверка роста токена
+def check_growth(token):
+    address = token["baseToken"]["address"]
+    price_change = token.get("priceChange", {}).get("h1", 0)
+
+    if address not in tracked_tokens:
+        tracked_tokens[address] = {
+            "symbol": token["baseToken"]["symbol"],
+            "price": token["priceUsd"],
+            "price_change": price_change
+        }
+        return
+
+    if price_change >= 30:
+        msg = (
+            f"🚀 <b>Рост токена!</b>\n\n"
+            f"💎 Токен: <b>{token['baseToken']['symbol']}</b>\n"
+            f"💰 Цена: ${token['priceUsd']}\n"
+            f"📈 Рост: {price_change}%\n\n"
+            f"🔗 DexScreener: https://dexscreener.com/solana/{address}\n"
+            f"👛 Phantom: https://phantom.app/asset/{address}"
+        )
+        send_message(msg)
+
+# Основной цикл
 def run_bot():
-    logging.info("🚀 Бот запущен, ловлю новые токены Solana...")
     last_alive = time.time()
+
+    send_message("✅ Бот запущен, ловлю новые токены Solana...")
 
     while True:
         try:
-            tokens = fetch_tokens()
-            now = datetime.utcnow()
-
+            tokens = get_new_tokens()
             for token in tokens:
-                address = token.get("address")
-                created_at = datetime.utcfromtimestamp(token.get("created_at", now.timestamp()) / 1000)
-
-                # Проверка: токен не старше 3 часов
-                if now - created_at > timedelta(hours=3):
-                    continue
-
-                # Новый токен
-                if address not in seen_tokens:
-                    seen_tokens.add(address)
-                    save_seen_tokens()
-
-                    info = fetch_token_info(address)
-                    price = info.get("value", "N/A")
-                    change_24h = info.get("priceChange24hPercent", 0)
-
+                address = token["baseToken"]["address"]
+                if address not in tracked_tokens:
                     msg = (
-                        f"🆕 Новый токен Solana!\n\n"
-                        f"🪙 {token.get('symbol')} ({address})\n"
-                        f"💵 Цена: {price}\n"
-                        f"📈 Рост 24ч: {change_24h:.2f}%\n\n"
-                        f"🔍 [Мониторинг](https://birdeye.so/token/{address}?chain=solana)\n"
-                        f"👛 [Phantom Wallet](https://phantom.app/ul/browse/{address})"
+                        f"🪙 <b>Найден новый токен!</b>\n\n"
+                        f"💎 Токен: <b>{token['baseToken']['symbol']}</b>\n"
+                        f"💰 Цена: ${token['priceUsd']}\n"
+                        f"⏰ Создан: {datetime.utcfromtimestamp(token['pairCreatedAt']/1000)}\n\n"
+                        f"🔗 DexScreener: https://dexscreener.com/solana/{address}\n"
+                        f"👛 Phantom: https://phantom.app/asset/{address}"
                     )
-                    bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+                    send_message(msg)
 
-                # Если рост > 30%
-                info = fetch_token_info(address)
-                change_24h = info.get("priceChange24hPercent", 0)
-                if change_24h > 30:
-                    msg = (
-                        f"🚨 Рост токена!\n\n"
-                        f"🪙 {token.get('symbol')} ({address})\n"
-                        f"📈 Рост: {change_24h:.2f}%\n\n"
-                        f"🔍 [Мониторинг](https://birdeye.so/token/{address}?chain=solana)\n"
-                        f"👛 [Phantom Wallet](https://phantom.app/ul/browse/{address})"
-                    )
-                    bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+                # Проверяем рост
+                check_growth(token)
 
-            # Каждые 2 часа сообщение что бот жив
-            if time.time() - last_alive >= 7200:
-                bot.send_message(chat_id=CHAT_ID, text="🤖 Бот работает и мониторит новые токены!")
+            # Сообщение "жив" каждые 2 часа
+            if time.time() - last_alive > 7200:
+                send_message("🤖 Бот жив и работает!")
                 last_alive = time.time()
 
-        except Exception as e:
-            logging.error(f"Ошибка: {e}")
+            time.sleep(60)  # проверяем раз в минуту
 
-        time.sleep(60)  # Проверка раз в минуту
+        except Exception as e:
+            print(f"Ошибка: {e}")
+            time.sleep(10)
 
 
 if __name__ == "__main__":
-    if check_api_key():
-        run_bot()
-    else:
-        logging.error("❌ API ключ недействителен, бот остановлен.")
+    run_bot()
