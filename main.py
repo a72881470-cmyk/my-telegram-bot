@@ -9,6 +9,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+SEND_ALL_NEW_TOKENS = os.getenv("SEND_ALL_NEW_TOKENS", "false").lower() == "true"
 
 # === Фильтры ===
 NEW_MAX_AGE_MIN = int(os.getenv("NEW_MAX_AGE_MIN", 180))
@@ -97,13 +98,14 @@ def check_new_tokens():
                 created_dt = datetime.now(timezone.utc)
             age_min = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60
 
-            # Фильтры
-            if age_min > NEW_MAX_AGE_MIN:
-                continue
-            if not (MIN_LIQ_USD <= liq <= MAX_LIQ_USD):
-                continue
-            if fdv > MAX_FDV_USD:
-                continue
+            # Если включен режим "все токены", фильтры пропускаем
+            if not SEND_ALL_NEW_TOKENS:
+                if age_min > NEW_MAX_AGE_MIN:
+                    continue
+                if not (MIN_LIQ_USD <= liq <= MAX_LIQ_USD):
+                    continue
+                if fdv > MAX_FDV_USD:
+                    continue
 
             # Сигнал
             msg = (
