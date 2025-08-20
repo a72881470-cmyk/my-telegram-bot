@@ -13,11 +13,9 @@ BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-API_URL = "https://public-api.birdeye.so/public/tokenlist?sort=createdAt&chain=solana"
-HEADERS = {
-    "x-api-key": BIRDEYE_API_KEY,
-    "accept": "application/json"
-}
+# Новый правильный эндпоинт Birdeye
+API_URL = "https://public-api.birdeye.so/defi/tokenlist?sort=createdAt&sort_type=desc&chain=solana"
+HEADERS = {"x-api-key": BIRDEYE_API_KEY}
 
 # Запоминаем токены, чтобы не слать повторно
 seen_tokens = {}
@@ -25,7 +23,7 @@ seen_tokens = {}
 def get_new_tokens():
     """Получаем список новых токенов с Birdeye"""
     try:
-        response = requests.get(API_URL, headers=HEADERS, timeout=10)
+        response = requests.get(API_URL, headers=HEADERS)
         if response.status_code == 200:
             return response.json().get("data", {}).get("items", [])
         else:
@@ -38,7 +36,7 @@ def get_new_tokens():
 def notify_telegram(text):
     """Отправка уведомления в Telegram"""
     try:
-        bot.send_message(CHAT_ID, text, parse_mode="HTML", disable_web_page_preview=True)
+        bot.send_message(CHAT_ID, text, parse_mode="HTML")
     except Exception as e:
         print("Ошибка при отправке в Telegram:", e)
 
@@ -48,16 +46,11 @@ def check_tokens():
 
     for token in tokens:
         try:
-            name = token.get("name", "Unknown")
-            symbol = token.get("symbol", "?")
+            name = token.get("name")
+            symbol = token.get("symbol")
             address = token.get("address")
-            price = float(token.get("priceUsd") or 0.0)
-
-            created_at_raw = token.get("createdAt")
-            if not created_at_raw:
-                continue  # если нет даты создания → пропускаем
-
-            created_at = datetime.fromtimestamp(created_at_raw / 1000, tz=timezone.utc)
+            price = token.get("priceUsd", 0) or 0
+            created_at = datetime.fromtimestamp(token.get("createdAt") / 1000, tz=timezone.utc)
 
             # Только токены младше 3 часов
             if (now - created_at) > timedelta(hours=3):
@@ -70,11 +63,14 @@ def check_tokens():
                     f"🆕 Новый токен на Solana!\n\n"
                     f"💎 <b>{name} ({symbol})</b>\n"
                     f"💰 Цена: ${price:.8f}\n"
-                    f"📈 Рост: 0% (новый)\n"
+                    f"📅 Создан: {created_at.strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
                     f"🔗 <a href='https://birdeye.so/token/{address}?chain=solana'>Мониторинг</a>\n"
                     f"👛 <a href='https://phantom.app/ul/browse/{address}'>Phantom</a>"
                 )
                 notify_telegram(msg)
+
+                # Логируем в консоль
+                print(f"[NEW] {name} ({symbol}) - {address} - ${price:.8f}")
 
             else:
                 old_price = seen_tokens[address]
@@ -87,6 +83,8 @@ def check_tokens():
                             f"🔗 <a href='https://birdeye.so/token/{address}?chain=solana'>Мониторинг</a>"
                         )
                         notify_telegram(msg)
+
+                        print(f"[GROWTH] {name} ({symbol}) +{growth:.2f}%")
 
                 # Обновляем цену
                 seen_tokens[address] = price
