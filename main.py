@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import telebot
+import requests
 from dotenv import load_dotenv
 
 # Загружаем .env
@@ -15,40 +16,28 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 # --- Анти-спам ---
 last_alert_time = 0
-ALERT_COOLDOWN = 60  # минимум 60 секунд между сообщениями
-seen_tokens = set()  # список уже отправленных токенов
+ALERT_COOLDOWN = 30  # минимум 30 секунд между сообщениями
+
+# --- Список уже отправленных токенов ---
+sent_tokens = set()
 
 
-def send_alert(token_name, growth, price, pair, dex_link, phantom_link):
+def send_alert(text: str, token_name: str):
     """
-    Отправляет сообщение в Telegram (с антиспамом и без повторов).
+    Отправляет сообщение в Telegram (если токен не дублируется и не чаще чем раз в минуту).
     """
     global last_alert_time
 
-    # Фильтр по росту
-    if growth < 50:
-        print(f"⏳ {token_name} пропущен, рост {growth}% < 50%")
-        return
-
-    # Проверка на дубликаты
-    if token_name in seen_tokens:
+    if token_name in sent_tokens:
         print(f"⚠ {token_name} уже отправляли, пропуск...")
         return
 
     now = time.time()
     if now - last_alert_time >= ALERT_COOLDOWN:
-        bot.send_message(
-            CHAT_ID,
-            f"🟢 Новый токен найден!\n\n"
-            f"🔹 Название: {token_name}\n"
-            f"📈 Рост: {growth}%\n"
-            f"💲 Цена: {price}\n"
-            f"🔄 Пара: {pair}\n"
-            f"🌐 DexScreener: {dex_link}\n"
-            f"👛 Phantom: {phantom_link}"
-        )
-        seen_tokens.add(token_name)  # помечаем как отправленный
+        bot.send_message(CHAT_ID, text, disable_web_page_preview=False)
         last_alert_time = now
+        sent_tokens.add(token_name)
+        print(f"✅ Отправили токен: {token_name}")
     else:
         print("⏳ Сообщение пропущено (анти-спам)")
 
@@ -62,26 +51,55 @@ def worker_status():
         time.sleep(7200)  # 2 часа
 
 
+def fetch_new_tokens():
+    """
+    Берем новые пары с DexScreener API (Solana)
+    """
+    url = "https://api.dexscreener.com/latest/dex/tokens/solana"
+    try:
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+
+        if "pairs" not in data:
+            return []
+
+        return data["pairs"][:5]  # Берем только топ-5 последних
+    except Exception as e:
+        print("Ошибка API:", e)
+        return []
+
+
 def main():
     # При запуске
-    bot.send_message(CHAT_ID, "🚀 Погнали фармить деньги 💸")
+    bot.send_message(CHAT_ID, "🚀 Погнали фармить 💰")
 
     # Запуск отдельного потока для сообщений "Я работаю"
     threading.Thread(target=worker_status, daemon=True).start()
 
-    # --- Тут твоя логика ловли токенов ---
+    # Основной цикл
     while True:
-        # Пример события: нашли новый токен
-        token_name = "TEST"
-        growth = 120  # %
-        price = "0.000123"
-        pair = "TEST/USDC"
-        dex_link = "https://dexscreener.com/solana/xxx"
-        phantom_link = "https://phantom.app/xxx"
+        pairs = fetch_new_tokens()
 
-        send_alert(token_name, growth, price, pair, dex_link, phantom_link)
+        for p in pairs:
+            token_name = p.get("baseToken", {}).get("name", "Unknown")
+            growth = p.get("priceChange", {}).get("h1", 0)  # рост за 1 час %
+            price = p.get("priceUsd", "?")
+            pair = f"{p.get('baseToken', {}).get('symbol', '')}/{p.get('quoteToken', {}).get('symbol', '')}"
+            dex_link = p.get("url", "https://dexscreener.com/")
+            phantom_link = f"https://phantom.app/ul/browse/{dex_link}"
 
-        time.sleep(30)  # проверка каждые 30 секунд (можешь увеличить)
+            send_alert(
+                f"🟢 Новый токен найден!\n\n"
+                f"🔹 Название: {token_name}\n"
+                f"📈 Рост (1ч): {growth}%\n"
+                f"💲 Цена: {price}\n"
+                f"🔄 Пара: {pair}\n"
+                f"🌐 DexScreener: {dex_link}\n"
+                f"👛 Phantom: {phantom_link}",
+                token_name
+            )
+
+        time.sleep(60)  # проверка раз в минуту
 
 
 if __name__ == "__main__":
