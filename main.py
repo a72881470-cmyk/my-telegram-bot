@@ -3,13 +3,14 @@ import telebot
 import time
 from datetime import datetime, timedelta
 
+# 🔑 Токен и чат
 TELEGRAM_TOKEN = "ТОКЕН_ТВОЕГО_БОТА"
 CHAT_ID = "ТВОЙ_CHAT_ID"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
 sent_tokens = set()
 
+# 📡 Получаем новые токены Solana
 def fetch_new_tokens():
     url = "https://public-api.birdeye.so/public/tokenlist?sort_by=created_at&sort_type=desc&offset=0&limit=50&chain=solana"
     headers = {"accept": "application/json", "x-chain": "solana"}
@@ -28,27 +29,64 @@ def fetch_new_tokens():
 
         for token in tokens:
             created_at = token.get("created_at")
-            if created_at:
-                created_at = datetime.utcfromtimestamp(int(created_at))
-                if now - created_at <= max_age:
-                    vol = token.get("volume_usd", 0)
-                    if vol and vol > 5000:  # фильтр по объёму
-                        new_tokens.append(token)
+            if not created_at:
+                continue
 
-        print(f"✅ Найдено {len(new_tokens)} новых токенов (за 2 дня, volume > 5k$)")
+            try:
+                created_at = datetime.utcfromtimestamp(int(created_at))
+            except Exception:
+                continue
+
+            if now - created_at <= max_age:
+                # 🔹 Объём
+                vol = token.get("volume_usd", 0)
+                try:
+                    vol = float(vol)
+                except Exception:
+                    vol = 0
+
+                # 🔹 Ликвидность
+                liq = token.get("liquidity_usd", 0)
+                try:
+                    liq = float(liq)
+                except Exception:
+                    liq = 0
+
+                # 📌 Фильтр: объём > 5000$ и ликвидность > 10k$
+                if vol > 5000 and liq > 10000:
+                    new_tokens.append(token)
+
+        print(f"✅ Найдено {len(new_tokens)} новых токенов (2 дня, vol>5k$, liq>10k$)")
         return new_tokens[:5]
 
     except Exception as e:
         print("Ошибка API:", e)
         return []
 
+# 📩 Отправляем токен в Telegram
 def send_token_alert(token):
     try:
         name = token.get("name", "N/A")
         symbol = token.get("symbol", "N/A")
         address = token.get("address", "N/A")
+
         price = token.get("price", "N/A")
+        try:
+            price = round(float(price), 6)
+        except Exception:
+            price = "N/A"
+
         volume = token.get("volume_usd", "N/A")
+        try:
+            volume = round(float(volume), 2)
+        except Exception:
+            volume = "N/A"
+
+        liquidity = token.get("liquidity_usd", "N/A")
+        try:
+            liquidity = round(float(liquidity), 2)
+        except Exception:
+            liquidity = "N/A"
 
         message = (
             f"🟢 Новый токен найден!\n\n"
@@ -56,15 +94,18 @@ def send_token_alert(token):
             f"🔹 Символ: {symbol}\n"
             f"💲 Цена: {price}\n"
             f"📊 Объём 24ч: {volume}$\n"
+            f"💧 Ликвидность: {liquidity}$\n"
             f"🌐 DexScreener: https://dexscreener.com/solana/{address}\n"
             f"👛 Phantom: https://phantom.app/ul/browse/{address}"
         )
 
         bot.send_message(CHAT_ID, message)
         print(f"✅ Отправлено: {name} ({symbol})")
+
     except Exception as e:
         print("Ошибка отправки в Telegram:", e)
 
+# 🚀 Основной цикл
 def main():
     print("🚀 Бот запущен, ловлю новые токены Solana...")
     while True:
