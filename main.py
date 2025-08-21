@@ -20,10 +20,18 @@ HEADERS = {"x-api-key": BIRDEYE_API_KEY}
 # Запоминаем токены, чтобы не слать повторно
 seen_tokens = {}
 
+
 def get_new_tokens():
     """Получаем список новых токенов с Birdeye"""
     try:
         response = requests.get(API_URL, headers=HEADERS)
+
+        # Если лимит исчерпан
+        if response.status_code == 400 and "limit exceeded" in response.text.lower():
+            print("⚠️ Превышен лимит запросов BirdEye. Ждём 60 секунд...")
+            time.sleep(60)
+            return []
+
         if response.status_code == 200:
             return response.json().get("data", {}).get("items", [])
         else:
@@ -33,12 +41,14 @@ def get_new_tokens():
         print("Ошибка при запросе:", e)
         return []
 
+
 def notify_telegram(text):
     """Отправка уведомления в Telegram"""
     try:
         bot.send_message(CHAT_ID, text, parse_mode="HTML")
     except Exception as e:
         print("Ошибка при отправке в Telegram:", e)
+
 
 def check_tokens():
     tokens = get_new_tokens()
@@ -69,7 +79,6 @@ def check_tokens():
                 )
                 notify_telegram(msg)
 
-                # Логируем в консоль
                 print(f"[NEW] {name} ({symbol}) - {address} - ${price:.8f}")
 
             else:
@@ -91,8 +100,10 @@ def check_tokens():
         except Exception as e:
             print("Ошибка при обработке токена:", e)
 
+
 def heartbeat():
     notify_telegram("✅ Бот жив 👋")
+
 
 if __name__ == "__main__":
     last_heartbeat = time.time()
