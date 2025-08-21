@@ -1,5 +1,6 @@
 import os
 import time
+import sys
 import requests
 import telebot
 from dotenv import load_dotenv
@@ -11,11 +12,19 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY")
 
+# Проверка переменных окружения
+if not TELEGRAM_TOKEN or not CHAT_ID or not BIRDEYE_API_KEY:
+    raise ValueError("❌ Нет переменных окружения. Проверь .env или Railway Variables!")
+
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # Новый правильный эндпоинт Birdeye (с лимитом на 50 токенов)
 API_URL = "https://public-api.birdeye.so/defi/tokenlist?sort=createdAt&sort_type=desc&chain=solana&limit=50"
-HEADERS = {"x-api-key": BIRDEYE_API_KEY}
+HEADERS = {
+    "x-api-key": BIRDEYE_API_KEY,
+    "accept": "application/json",
+    "User-Agent": "Mozilla/5.0"
+}
 
 # Запоминаем токены, чтобы не слать повторно
 seen_tokens = {}
@@ -30,7 +39,7 @@ def get_new_tokens():
     global backoff_time
 
     try:
-        response = requests.get(API_URL, headers=HEADERS)
+        response = requests.get(API_URL, headers=HEADERS, timeout=10)
 
         # Если лимит исчерпан
         if response.status_code == 400 and "limit exceeded" in response.text.lower():
@@ -44,10 +53,10 @@ def get_new_tokens():
             backoff_time = 60  # сбрасываем бэкофф, если успех
             return response.json().get("data", {}).get("items", [])
         else:
-            print("Ошибка API:", response.status_code, response.text)
+            print("Ошибка API:", response.status_code, response.text, file=sys.stderr)
             return []
     except Exception as e:
-        print("Ошибка при запросе:", e)
+        print("Ошибка при запросе:", e, file=sys.stderr)
         return []
 
 
@@ -56,7 +65,7 @@ def notify_telegram(text):
     try:
         bot.send_message(CHAT_ID, text, parse_mode="HTML")
     except Exception as e:
-        print("Ошибка при отправке в Telegram:", e)
+        print("Ошибка при отправке в Telegram:", e, file=sys.stderr)
 
 
 def check_tokens():
@@ -65,11 +74,16 @@ def check_tokens():
 
     for token in tokens:
         try:
-            name = token.get("name")
-            symbol = token.get("symbol")
+            name = token.get("name") or "Unknown"
+            symbol = token.get("symbol") or "???"
             address = token.get("address")
             price = token.get("priceUsd", 0) or 0
-            created_at = datetime.fromtimestamp(token.get("createdAt") / 1000, tz=timezone.utc)
+
+            created_raw = token.get("createdAt")
+            if not created_raw:
+                continue
+
+            created_at = datetime.fromtimestamp(created_raw / 1000, tz=timezone.utc)
 
             # Только токены младше 3 часов
             if (now - created_at) > timedelta(hours=3):
@@ -107,7 +121,7 @@ def check_tokens():
                 # Обновляем цену
                 seen_tokens[address] = price
         except Exception as e:
-            print("Ошибка при обработке токена:", e)
+            print("Ошибка при обработке токена:", e, file=sys.stderr)
 
 
 def heartbeat():
