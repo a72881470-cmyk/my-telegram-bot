@@ -13,26 +13,35 @@ BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Новый правильный эндпоинт Birdeye
-API_URL = "https://public-api.birdeye.so/defi/tokenlist?sort=createdAt&sort_type=desc&chain=solana"
+# Новый правильный эндпоинт Birdeye (с лимитом на 50 токенов)
+API_URL = "https://public-api.birdeye.so/defi/tokenlist?sort=createdAt&sort_type=desc&chain=solana&limit=50"
 HEADERS = {"x-api-key": BIRDEYE_API_KEY}
 
 # Запоминаем токены, чтобы не слать повторно
 seen_tokens = {}
 
+# для бэкоффа
+backoff_time = 60  # начинаем с 1 минуты
+max_backoff = 900  # максимум 15 минут
+
 
 def get_new_tokens():
     """Получаем список новых токенов с Birdeye"""
+    global backoff_time
+
     try:
         response = requests.get(API_URL, headers=HEADERS)
 
         # Если лимит исчерпан
         if response.status_code == 400 and "limit exceeded" in response.text.lower():
-            print("⚠️ Превышен лимит запросов BirdEye. Ждём 60 секунд...")
-            time.sleep(60)
+            print(f"⚠️ Превышен лимит запросов BirdEye. Ждём {backoff_time} секунд...")
+            time.sleep(backoff_time)
+            # увеличиваем паузу (экспоненциально)
+            backoff_time = min(backoff_time * 2, max_backoff)
             return []
 
         if response.status_code == 200:
+            backoff_time = 60  # сбрасываем бэкофф, если успех
             return response.json().get("data", {}).get("items", [])
         else:
             print("Ошибка API:", response.status_code, response.text)
@@ -116,4 +125,4 @@ if __name__ == "__main__":
             heartbeat()
             last_heartbeat = time.time()
 
-        time.sleep(60)  # проверяем раз в минуту
+        time.sleep(180)  # проверяем раз в 3 минуты
